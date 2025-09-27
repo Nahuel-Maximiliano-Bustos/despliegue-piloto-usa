@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Blueprint Analyzer - Sistema de Gestión</title>
+    
+    <!-- Tailwind CSS -->
+    <link rel="stylesheet" href="./dist/output.css">
+    
+    <!-- Meta tags de seguridad -->
+    <meta name="robots" content="noindex, nofollow">
+    <meta http-equiv="X-Content-Type-Options" content="nosniff">
+    <meta http-equiv="X-XSS-Protection" content="1; mode=block">
+    
+    <style>
+        /* Fallback styles si Tailwind no carga */
+        body { 
+            font-family: system-ui, -apple-system, sans-serif; 
+            margin: 0; 
+            background: #0f172a; 
+            color: white;
+        }
+        .bg-slate-900 { background-color: #0f172a; }
+        .bg-slate-800 { background-color: #1e293b; }
+        .text-white { color: white; }
+        .hidden { display: none !important; }
+        
+        /* Estilos mínimos para el login overlay */
+        #auth-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+        
+        #auth-form {
+            background: white;
+            padding: 2rem;
+            border-radius: 1rem;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 400px;
+            margin: 1rem;
+        }
+        
+        /* Asegurar que el área de componentes use el fondo original */
+        #app-content {
+            background: #0B0F14 !important;
+            min-height: 100vh;
+            width: 100%;
+        }
+        
+        /* Permitir que los componentes usen todo el espacio */
+        #main-app main {
+            padding: 0 !important;
+            margin: 0 !important;
+        }
+        
+        /* Asegurar que los botones del sidebar sean visibles */
+        [data-aside] nav a {
+            display: flex !important;
+            align-items: center !important;
+            color: #cbd5e1 !important;
+            text-decoration: none !important;
+        }
+        
+        [data-aside] nav a:hover {
+            background-color: rgba(255, 255, 255, 0.05) !important;
+            color: white !important;
+        }
+        
+        /* Asegurar que las secciones sean visibles */
+        [data-section] {
+            color: rgba(148, 163, 184, 0.7) !important;
+            font-size: 11px !important;
+            text-transform: uppercase !important;
+        }
+        
+        #auth-form h2 {
+            color: #1f2937;
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        
+        #auth-form input {
+            width: 100%;
+            padding: 0.75rem;
+            margin-bottom: 1rem;
+            border: 1px solid #d1d5db;
+            border-radius: 0.5rem;
+            box-sizing: border-box;
+        }
+        
+        #auth-form button {
+            width: 100%;
+            background: #4f46e5;
+            color: white;
+            padding: 0.75rem;
+            border: none;
+            border-radius: 0.5rem;
+            cursor: pointer;
+        }
+        
+        #auth-form button:hover {
+            background: #4338ca;
+        }
+        
+        .auth-message {
+            padding: 0.75rem;
+            margin-bottom: 1rem;
+            border-radius: 0.5rem;
+            display: none;
+        }
+        
+        .auth-message.error {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+        
+        .auth-message.success {
+            background: #d1fae5;
+            color: #047857;
+        }
+    </style>
+</head>
+
+<body class="bg-slate-900">
+    <!-- Login Overlay (initially hidden) -->
+    <div id="auth-overlay">
+        <form id="auth-form">
+            <h2>🔧 Blueprint Analyzer</h2>
+            <div id="auth-message" class="auth-message"></div>
+            <input type="email" id="email" placeholder="Email" autocomplete="email" required>
+            <input type="password" id="password" placeholder="Password" autocomplete="current-password" required>
+            <button type="submit">Sign In</button>
+        </form>
+    </div>
+
+    <!-- Tu aplicación principal (inicialmente oculta) -->
+    <div id="main-app" class="hidden">
+        <!-- Main container with your original sidebar and content -->
+        <div class="flex min-h-screen">
+            <!-- Tu sidebar original -->
+            <div id="sidebar-container" data-component="asidebar"></div>
+
+            <!-- Main content area where components are loaded -->
+            <main id="main-content" class="flex-1 bg-slate-900" style="padding: 0; margin: 0; margin-left: 280px; transition: margin-left 200ms;">
+                <div id="app-content" data-component="dashboard" style="width: 100%; min-height: 100vh; background: #0B0F14;">
+                    <!-- Components will be loaded here dynamically -->
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Scripts del sistema de autenticación -->
+    <script src="./js/security.js"></script>
+    <script src="./js/auth.js"></script>
+    
+    <!-- Tu sistema principal de componentes -->
+    <script type="module" src="./js/main.js"></script>
+    
+    <!-- Script de inicialización y autenticación -->
+    <script>
+        let authSystem = null;
+        let isAuthenticated = false;
+
+        // Función para mostrar mensajes
+        function showMessage(message, type = 'error') {
+            const messageDiv = document.getElementById('auth-message');
+            messageDiv.textContent = message;
+            messageDiv.className = `auth-message ${type}`;
+            messageDiv.style.display = 'block';
+            
+            if (type === 'success') {
+                setTimeout(() => {
+                    messageDiv.style.display = 'none';
+                }, 2000);
+            }
+        }
+
+        // Function to show the main application
+        function showMainApp() {
+            const authOverlay = document.getElementById('auth-overlay');
+            const mainApp = document.getElementById('main-app');
+            
+            if (authOverlay) {
+                authOverlay.style.display = 'none';
+            }
+            if (mainApp) {
+                mainApp.classList.remove('hidden');
+            }
+            
+            // Refresh sidebar with user info - force remount
+            setTimeout(async () => {
+                const sidebarContainer = document.getElementById('sidebar-container');
+                if (sidebarContainer) {
+                    // Clear and remount sidebar with updated user info
+                    if (sidebarContainer.__component) {
+                        try {
+                            sidebarContainer.__component.destroy?.();
+                        } catch (e) {}
+                        sidebarContainer.__component = null;
+                    }
+                    
+                    // Import and mount the sidebar component again
+                    try {
+                        const module = await import('./js/components/asidebar/asidebar.js');
+                        const mountFn = module.default || module.mount || module.createComponent;
+                        if (mountFn) {
+                            // Get current user info for sidebar profile
+                            const currentUser = window.authSystem ? window.authSystem.getCurrentUser() : null;
+                            const userProfile = currentUser ? {
+                                name: currentUser.name,
+                                email: currentUser.email,
+                                initials: currentUser.name.split(' ').map(n => n[0]).join('').toUpperCase()
+                            } : {
+                                name: 'User',
+                                email: 'user@blueprint.com',
+                                initials: 'U'
+                            };
+                            
+                            console.log('🔄 Remounting sidebar with user profile:', userProfile);
+                            
+                            const sidebarProps = {
+                                brand: "Blueprint Analyzer v5.0",
+                                profile: userProfile,
+                                items: [
+                                    {
+                                        section: "Overview",
+                                        items: [
+                                            { label: "Dashboard", href: "#dashboard", icon: "dashboard" },
+                                            { label: "Project Management", href: "#project-management", icon: "folder" }
+                                        ]
+                                    },
+                                    {
+                                        section: "Analysis", 
+                                        items: [
+                                            { label: "Blueprint Analyzer", href: "#blueprint-analyzer", icon: "search" },
+                                            { label: "Material & Labor", href: "#material-labor", icon: "hammer" }
+                                        ]
+                                    },
+                                    {
+                                        section: "Financial",
+                                        items: [
+                                            { label: "Cost Estimation & Budget Control", href: "#cost-budget", icon: "dollar" }
+                                        ]
+                                    },
+                                    {
+                                        section: "Reporting",
+                                        items: [
+                                            { label: "Reports", href: "#reports", icon: "chart" },
+                                            { label: "Suppliers", href: "#suppliers", icon: "truck" }
+                                        ]
+                                    }
+                                ]
+                            };
+                            
+                            const result = await mountFn(sidebarContainer, sidebarProps);
+                            sidebarContainer.__component = {
+                                name: 'asidebar',
+                                mounted: true,
+                                destroy: result?.destroy,
+                                instance: result
+                            };
+                        }
+                    } catch (error) {
+                        console.error('Error reloading sidebar:', error);
+                    }
+                }
+            }, 500);
+        }
+
+        // Función para mostrar el login
+        function showLogin() {
+            const authOverlay = document.getElementById('auth-overlay');
+            const mainApp = document.getElementById('main-app');
+            
+            if (authOverlay) {
+                authOverlay.style.display = 'flex';
+            }
+            if (mainApp) {
+                mainApp.classList.add('hidden');
+            }
+        }
+
+        // Inicializar el sistema
+        async function initApp() {
+            try {
+                // Check if AuthSystem is available
+                if (typeof AuthSystem !== 'undefined') {
+                    console.log('Initializing AuthSystem...');
+                    authSystem = new AuthSystem();
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                    
+                    // Check existing session
+                    if (authSystem.isLoggedIn()) {
+                        console.log('Active session found');
+                        isAuthenticated = true;
+                        showMainApp();
+                        return;
+                    }
+                    
+                    console.log('No active session, showing login');
+                    showLogin();
+                } else {
+                    console.warn('AuthSystem not available, showing app without authentication');
+                    // If no auth system, show app directly
+                    const mainApp = document.getElementById('main-app');
+                    if (mainApp) {
+                        mainApp.classList.remove('hidden');
+                    }
+                }
+                
+            } catch (error) {
+                console.error('Error during initialization:', error);
+                // If error, show app without authentication
+                const mainApp = document.getElementById('main-app');
+                if (mainApp) {
+                    mainApp.classList.remove('hidden');
+                }
+            }
+        }
+
+        // Event listeners
+        document.addEventListener('DOMContentLoaded', () => {
+            // Login form
+            document.getElementById('auth-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                
+                if (!authSystem) {
+                    showMessage('Authentication system not available');
+                    return;
+                }
+                
+                const email = document.getElementById('email').value.trim();
+                const password = document.getElementById('password').value;
+                
+                if (!email || !password) {
+                    showMessage('Please complete all fields');
+                    return;
+                }
+                
+                try {
+                    const result = await authSystem.login(email, password);
+                    
+                    if (result.success) {
+                        isAuthenticated = true;
+                        showMessage(`Welcome ${result.user.name}!`, 'success');
+                        setTimeout(() => {
+                            showMainApp();
+                        }, 1000);
+                    } else {
+                        showMessage(result.message);
+                    }
+                } catch (error) {
+                    showMessage('Login error');
+                    console.error('Login error:', error);
+                }
+            });
+
+            // Listen for logout event from sidebar
+            document.addEventListener('ui:logout', () => {
+                if (authSystem) {
+                    authSystem.logout();
+                }
+                isAuthenticated = false;
+                showLogin();
+            });
+
+            // Listen for sidebar toggle to adjust main content margin
+            document.addEventListener('ui:sidebar:toggle', (e) => {
+                const { expanded } = e.detail;
+                const mainContent = document.getElementById('main-content');
+                if (mainContent) {
+                    mainContent.style.marginLeft = expanded ? '280px' : '72px';
+                }
+            });
+
+            // Set initial margin based on sidebar state
+            setTimeout(() => {
+                const sidebar = document.querySelector('[data-aside]');
+                const mainContent = document.getElementById('main-content');
+                if (sidebar && mainContent) {
+                    const isExpanded = sidebar.dataset.state === 'expanded';
+                    mainContent.style.marginLeft = isExpanded ? '280px' : '72px';
+                }
+            }, 300);
+
+            // Initialize the application
+            initApp();
+        });
+
+        // Make available for component system
+        window.isAuthenticated = () => isAuthenticated;
+    </script>
+</body>
+</html>

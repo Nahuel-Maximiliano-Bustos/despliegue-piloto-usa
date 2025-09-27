@@ -1,0 +1,20 @@
+{
+  "name": "steeleye",
+  "version": "1.0.0",
+  "description": "Actúa como un dev frontend senior. Generá un proyecto solo frontend (sin backend) que replica exactamente las pantallas adjuntas y funciona: el usuario sube un PDF y un Excel de piezas, el sistema detecta, cuenta y marca coincidencias por página con highlights de color, muestra resumen y filtros, y permite exportar CSV/JSON. Usá Tailwind + JS ESM + PDF.js + Tesseract.js + SheetJS, todo por CDN. No agregues frameworks ni bundlers.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tailwindcss -i ./src/input.css -o ./dist/output.css --minify",
+    "dev": "tailwindcss -i ./src/input.css -o ./dist/output.css --watch"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.1"
+  }
+}

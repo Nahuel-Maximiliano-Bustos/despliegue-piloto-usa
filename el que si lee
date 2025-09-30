@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="es">
+
+<head>
+    <meta charset="utf-8" />
+    <title>Conteo de columnas (vector PDF: rect + path)</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+        body {
+            font-family: system-ui, Segoe UI, Roboto, Arial;
+            margin: 16px
+        }
+
+        .row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+            margin: 8px 0
+        }
+
+        label {
+            font-size: 14px
+        }
+
+        input[type="number"] {
+            width: 90px
+        }
+
+        #viewer {
+            position: relative;
+            display: inline-block;
+            border: 1px solid #ddd
+        }
+
+        #pdfCanvas {
+            display: block
+        }
+
+        #overlay {
+            position: absolute;
+            inset: 0;
+            pointer-events: none
+        }
+
+        .pill {
+            background: #eee;
+            border-radius: 999px;
+            padding: 2px 8px;
+            font-size: 12px
+        }
+    </style>
+</head>
+
+<body>
+    <h2>Detector de columnas cuadradas (vectorial 100%)</h2>
+
+    <div class="row">
+        <label>PDF: <input id="file" type="file" accept="application/pdf"></label>
+        <label>Página: <input id="page" type="number" value="8" min="1"></label>
+        <label>Escala render: <input id="scale" type="number" value="1.8" min="0.5" max="4" step="0.1"></label>
+        <button id="run" disabled>Contar y etiquetar</button>
+        <span id="info" class="pill">Subí un PDF</span>
+    </div>
+
+    <div class="row">
+        <label>Tolerancia ángulo (°): <input id="angTol" type="number" value="10" min="4" max="20"></label>
+        <label>Tolerancia lado (±%): <input id="sideTol" type="number" value="12" min="5" max="25"></label>
+        <label>Mín. lado (px): <input id="minSide" type="number" value="18" min="4" max="200"></label>
+        <label>Ignorar rótulo der. (% ancho): <input id="rightCut" type="number" value="14" min="0" max="40"></label>
+    </div>
+
+    <div id="viewer">
+        <canvas id="pdfCanvas"></canvas>
+        <canvas id="overlay"></canvas>
+    </div>
+
+    <div class="row">
+        <span class="pill">Columnas: <b id="count">0</b></span>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc =
+            'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+        const $ = id => document.getElementById(id);
+        const els = {
+            file: $('file'), page: $('page'), scale: $('scale'),
+            run: $('run'), info: $('info'),
+            pdf: $('pdfCanvas'), overlay: $('overlay'),
+            count: $('count'),
+            angTol: $('angTol'), sideTol: $('sideTol'), minSide: $('minSide'), rightCut: $('rightCut'),
+        };
+        let pdfDoc = null, lastRender = null;
+
+        els.file.addEventListener('change', async e => {
+            const f = e.target.files?.[0]; if (!f) return;
+            const buf = await f.arrayBuffer();
+            try {
+                pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
+                els.page.max = pdfDoc.numPages;
+                els.info.textContent = `PDF ok (${pdfDoc.numPages} páginas)`;
+                els.run.disabled = false;
+                await renderPage();
+            } catch (err) { els.info.textContent = 'Error: ' + err.message; }
+        });
+        els.page.addEventListener('change', renderPage);
+        els.scale.addEventListener('change', renderPage);
+
+        async function renderPage() {
+            if (!pdfDoc) return;
+            const n = Math.min(Math.max(1, +els.page.value || 1), pdfDoc.numPages);
+            const page = await pdfDoc.getPage(n);
+            const vp = page.getViewport({ scale: parseFloat(els.scale.value) || 1.8 });
+
+            const c = els.pdf, ctx = c.getContext('2d', { willReadFrequently: true });
+            c.width = vp.width | 0; c.height = vp.height | 0;
+            els.overlay.width = c.width; els.overlay.height = c.height;
+            const octx = els.overlay.getContext('2d'); octx.clearRect(0, 0, c.width, c.height);
+
+            if (lastRender) { try { lastRender.cancel(); } catch { } }
+            lastRender = page.render({ canvasContext: ctx, viewport: vp });
+            await lastRender.promise;
+            els.count.textContent = '0';
+            els.info.textContent = `Página ${n} renderizada`;
+        }
+
+        /* ---------- Geometría ---------- */
+        function mul(a, b) {
+            return [
+                a[0] * b[0] + a[2] * b[1],
+                a[1] * b[0] + a[3] * b[1],
+                a[0] * b[2] + a[2] * b[3],
+                a[1] * b[2] + a[3] * b[3],
+                a[0] * b[4] + a[2] * b[5] + a[4],
+                a[1] * b[4] + a[3] * b[5] + a[5]
+            ];
+        }
+        function apply(m, x, y) { return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]; }
+        function aabb(pts) {
+            let xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+            const minx = Math.min(...xs), maxx = Math.max(...xs);
+            const miny = Math.min(...ys), maxy = Math.max(...ys);
+            return { x: minx, y: miny, w: maxx - minx, h: maxy - miny, cx: (minx + maxx) / 2, cy: (miny + maxy) / 2, area: (maxx - minx) * (maxy - miny) };
+        }
+        function angle(a, b, c) { // ángulo en b (°)
+            const v1 = [a[0] - b[0], a[1] - b[1]], v2 = [c[0] - b[0], c[1] - b[1]];
+            const d = (v1[0] * v2[0] + v1[1] * v2[1]) / (Math.hypot(...v1) * Math.hypot(...v2));
+            return Math.acos(Math.max(-1, Math.min(1, d))) * 180 / Math.PI;
+        }
+        function iou(A, B) {
+            const x1 = Math.max(A.x, B.x), y1 = Math.max(A.y, B.y);
+            const x2 = Math.min(A.x + A.w, B.x + B.w), y2 = Math.min(A.y + A.h, B.y + B.h);
+            const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+            const U = A.w * A.h + B.w * B.h - inter; return U > 0 ? inter / U : 0;
+        }
+        function contains(big, small) {
+            return small.x >= big.x && small.y >= big.y &&
+                small.x + small.w <= big.x + big.w && small.y + small.h <= big.y + big.h;
+        }
+
+        /* ---------- Detección ---------- */
+        els.run.addEventListener('click', async () => {
+            if (!pdfDoc) return;
+            const n = Math.min(Math.max(1, +els.page.value || 1), pdfDoc.numPages);
+            const page = await pdfDoc.getPage(n);
+            const OPS = pdfjsLib.OPS;
+            const vp = page.getViewport({ scale: parseFloat(els.scale.value) || 1.8 });
+            const opList = await page.getOperatorList();
+
+            // Estado gráfico mínimo
+            let ctm = [1, 0, 0, 1, 0, 0], stack = [];
+            const rects = []; // candidatos (en coords de canvas)
+
+            const pushRect = (pts) => { // pts en PDF-space → canvas con (viewport ∘ ctm)
+                const M = mul(vp.transform, ctm);
+                const P = pts.map(p => apply(M, p[0], p[1]));
+                const bb = aabb(P);
+                rects.push(bb);
+            };
+
+            // Extraer tanto OPS.rectangle como paths cerrados de 4 segmentos
+            for (let i = 0; i < opList.fnArray.length; i++) {
+                const fn = opList.fnArray[i], args = opList.argsArray[i];
+
+                if (fn === OPS.save) stack.push(ctm.slice());
+                else if (fn === OPS.restore) ctm = stack.pop() || [1, 0, 0, 1, 0, 0];
+                else if (fn === OPS.transform) ctm = mul(ctm, args);
+
+                else if (fn === OPS.rectangle) { // args: [x,y,w,h, x,y,w,h, ...]
+                    for (let j = 0; j < args.length; j += 4) {
+                        const x = args[j], y = args[j + 1], w = args[j + 2], h = args[j + 3];
+                        const pts = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+                        pushRect(pts);
+                    }
+                }
+                else if (fn === OPS.constructPath) {
+                    const pathOps = args[0], coords = args[1];
+                    let ci = 0, curr = [], polys = [];
+                    const flush = () => { if (curr.length >= 3) polys.push(curr), curr = []; };
+                    for (const op of pathOps) {
+                        if (op === OPS.moveTo) { const x = coords[ci++], y = coords[ci++]; flush(); curr = [[x, y]]; }
+                        else if (op === OPS.lineTo) { const x = coords[ci++], y = coords[ci++]; curr.push([x, y]); }
+                        else if (op === OPS.closePath) { flush(); }
+                        else if (op === OPS.rectangle) {
+                            const x = coords[ci++], y = coords[ci++], w = coords[ci++], h = coords[ci++];
+                            polys.push([[x, y], [x + w, y], [x + w, y + h], [x, y + h]]);
+                        } else {
+                            // ignorar curvas; si aparecen, esa figura no será cuadrado perfecto
+                            // avanzar puntero según op (curvas usan 6 coords/segmento)
+                            if (op === OPS.curveTo) { ci += 6; }
+                            else if (op === OPS.curveTo2) { ci += 4; }
+                            else if (op === OPS.curveTo3) { ci += 4; }
+                        }
+                    }
+                    // Revisar polígonos: 4 vértices, ortogonales, lados parecidos
+                    const angTol = (+els.angTol.value || 10);
+                    const sideTol = (+els.sideTol.value || 12) / 100;
+                    const minSide = (+els.minSide.value || 18);
+                    for (const poly of polys) {
+                        if (poly.length !== 4) continue;
+                        // cerrar si no está cerrado
+                        const P = poly.slice();
+                        if (P[0][0] !== P[P.length - 1][0] || P[0][1] !== P[P.length - 1][1]) P.push(P[0]);
+                        // ángulos ~ 90
+                        const A = angle(P[3], P[0], P[1]),
+                            B = angle(P[0], P[1], P[2]),
+                            C = angle(P[1], P[2], P[3]),
+                            D = angle(P[2], P[3], P[0]);
+                        const goodAngles = [A, B, C, D].every(a => Math.abs(90 - a) <= angTol);
+                        if (!goodAngles) continue;
+                        // lados parecidos (cuadrado)
+                        const L = [
+                            Math.hypot(P[1][0] - P[0][0], P[1][1] - P[0][1]),
+                            Math.hypot(P[2][0] - P[1][0], P[2][1] - P[1][1]),
+                            Math.hypot(P[3][0] - P[2][0], P[3][1] - P[2][1]),
+                            Math.hypot(P[0][0] - P[3][0], P[0][1] - P[3][1]),
+                        ];
+                        const m = L.reduce((a, b) => a + b, 0) / L.length;
+                        if (m < minSide) continue;
+                        const okSides = L.every(s => Math.abs(s - m) <= sideTol * m);
+                        if (!okSides) continue;
+                        pushRect(poly);
+                    }
+                }
+            }
+
+            // Filtrado: cortar rótulo derecho + fusionar duplicados + quitar “cuadrado interno”
+            const cutX = els.pdf.width * (1 - (Math.max(0, Math.min(40, +els.rightCut.value || 14)) / 100));
+            let boxes = rects.filter(b => (b.cx < cutX));
+            // fusion duplicados (IoU)
+            const merged = [];
+            for (const r of boxes.sort((a, b) => (a.x - b.x) || (a.y - b.y))) {
+                let put = true;
+                for (let i = 0; i < merged.length; i++) {
+                    if (iou(merged[i], r) > 0.4) {
+                        if (merged[i].area < r.area) merged[i] = r;
+                        put = false; break;
+                    }
+                }
+                if (put) merged.push(r);
+            }
+            // quitar los muy contenidos (cuadrado chico dentro del grande)
+            const outer = [];
+            for (const r of merged) {
+                let drop = false;
+                for (const s of merged) {
+                    if (s === r) continue;
+                    if (contains(s, r) && r.area < 0.4 * s.area) { drop = true; break; }
+                }
+                if (!drop) outer.push(r);
+            }
+
+            // Dibujo y etiquetas
+            const o = els.overlay.getContext('2d');
+            o.clearRect(0, 0, els.overlay.width, els.overlay.height);
+            o.strokeStyle = 'red'; o.lineWidth = 2;
+            o.font = '14px system-ui,Segoe UI,Roboto,Arial'; o.textBaseline = 'middle';
+            outer.sort((a, b) => (a.y === b.y ? a.x - b.x : a.y - b.y));
+            for (let i = 0; i < outer.length; i++) {
+                const r = outer[i];
+                o.strokeRect(r.x, r.y, r.w, r.h);
+                const label = `C-${i + 1}`;
+                const pad = 3, tw = o.measureText(label).width + pad * 2, th = 16;
+                const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+                o.fillStyle = 'rgba(255,255,255,0.85)'; o.fillRect(cx - tw / 2, cy - th / 2, tw, th);
+                o.strokeStyle = 'red'; o.strokeRect(cx - tw / 2, cy - th / 2, tw, th);
+                o.fillStyle = '#000'; o.fillText(label, cx - tw / 2 + pad, cy);
+            }
+            els.count.textContent = outer.length;
+            els.info.textContent = `Detectadas ${outer.length} columnas (vector)`;
+        });
+    </script>
+</body>
+
+</html>

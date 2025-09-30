@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Modal Blueprint Analyzer</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #0b1220;
+            color: #e5e7eb;
+            margin: 0;
+            padding: 20px;
+        }
+        
+        /* ===== Modal de Progreso ===== */
+        .bp-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(4px);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s ease;
+        }
+        .bp-modal.show {
+            opacity: 1;
+            visibility: visible;
+        }
+        .bp-modal-content {
+            background: #0f172a;
+            border: 1px solid #1f2937;
+            border-radius: 16px;
+            padding: 2rem;
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+            transform: scale(0.9);
+            transition: transform 0.3s ease;
+        }
+        .bp-modal.show .bp-modal-content {
+            transform: scale(1);
+        }
+        .bp-progress-circle {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 1rem;
+            position: relative;
+        }
+        .bp-crane-emoji {
+            font-size: 2.5rem;
+            animation: craneWork 2s ease-in-out infinite;
+        }
+        @keyframes craneWork {
+            0%, 100% { transform: rotate(-5deg) scale(1); }
+            50% { transform: rotate(5deg) scale(1.1); }
+        }
+        .bp-progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #1f2937;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 1rem 0;
+        }
+        .bp-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #6366f1, #8b5cf6);
+            border-radius: 4px;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        
+        .test-btn {
+            background: #6366f1;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px;
+        }
+        .test-btn:hover {
+            background: #5855eb;
+        }
+    </style>
+</head>
+<body>
+    <h1>🏗️ Test Modal Blueprint Analyzer</h1>
+    <p>Prueba del modal de progreso para la detección de columnas</p>
+    
+    <button class="test-btn" onclick="testModal()">Simular Detección de Columnas</button>
+    <button class="test-btn" onclick="hideModal()">Cerrar Modal</button>
+    
+    <!-- Modal de Progreso -->
+    <div class="bp-modal" id="progressModal">
+        <div class="bp-modal-content">
+            <div class="bp-progress-circle">
+                <div class="bp-crane-emoji">🏗️</div>
+            </div>
+            <h3 style="font-size: 1.2rem; font-weight: bold; color: #e5e7eb; margin-bottom: 0.5rem;">Analizando Plano</h3>
+            <p style="font-size: 0.9rem; color: #94a3b8; margin-bottom: 1rem;" id="progressText">Iniciando detección...</p>
+            <div class="bp-progress-bar">
+                <div class="bp-progress-fill" id="progressFill"></div>
+            </div>
+            <div style="font-size: 0.8rem; color: #64748b;" id="progressPercent">0%</div>
+        </div>
+    </div>
+
+    <script>
+        const modal = document.getElementById('progressModal');
+        const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
+        const progressPercent = document.getElementById('progressPercent');
+        
+        function showModal() {
+            modal.classList.add('show');
+        }
+        
+        function hideModal() {
+            modal.classList.remove('show');
+        }
+        
+        function updateProgress(percent, text) {
+            progressFill.style.width = `${percent}%`;
+            progressPercent.textContent = `${Math.round(percent)}%`;
+            if (text) progressText.textContent = text;
+        }
+        
+        async function testModal() {
+            showModal();
+            
+            const steps = [
+                { percent: 10, text: "Cargando página..." },
+                { percent: 20, text: "Obteniendo operaciones vectoriales..." },
+                { percent: 40, text: "Analizando vectores del PDF..." },
+                { percent: 60, text: "Extrayendo rectángulos y paths..." },
+                { percent: 80, text: "Filtrando y optimizando resultados..." },
+                { percent: 95, text: "Guardando columnas detectadas..." },
+                { percent: 100, text: "¡Detectadas 12 columnas!" }
+            ];
+            
+            for (const step of steps) {
+                updateProgress(step.percent, step.text);
+                await new Promise(resolve => setTimeout(resolve, 800));
+            }
+            
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            hideModal();
+        }
+    </script>
+</body>
+</html>

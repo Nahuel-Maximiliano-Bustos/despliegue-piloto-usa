@@ -87,7 +87,7 @@ async function mountComponent(el) {
         if (k === COMPONENT_ATTR || k === PROPS_ATTR) continue;
         other[k] = coerce(v);
     }
-    const props = { ...other, ...jsonProps };
+    let props = { ...other, ...jsonProps };
     console.log(`🔧 Final props for ${name}:`, props); // Debug
 
     el.setAttribute("aria-busy", "true");

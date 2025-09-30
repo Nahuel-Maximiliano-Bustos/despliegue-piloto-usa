@@ -1,0 +1,36 @@
+==========================================
+    SISTEMA DE USUARIOS - BLUEPRINT ANALYZER
+==========================================
+
+USUARIOS PARA PRUEBAS DEL SISTEMA:
+
+1. ADMINISTRADOR PRINCIPAL
+   Usuario: admin@blueprint.com
+   Contraseña: Bp2025!Admin#
+
+2. INGENIERO SENIOR
+   Usuario: ing.rodriguez@blueprint.com  
+   Contraseña: StElEng$2025
+
+3. ARQUITECTO JEFE
+   Usuario: arq.martinez@blueprint.com
+   Contraseña: ArchDesign*24
+
+4. SUPERVISOR TÉCNICO
+   Usuario: supervisor@blueprint.com
+   Contraseña: TechSuper&25!
+
+5. ANALISTA DE PROYECTOS
+   Usuario: analista@blueprint.com
+   Contraseña: ProjAnalyst#2025
+
+==========================================
+NOTAS DE SEGURIDAD:
+- Todas las contraseñas tienen al menos 8 caracteres
+- Incluyen mayúsculas, minúsculas, números y símbolos
+- Se almacenan hasheadas en el sistema
+- Sesión expira automáticamente después de 2 horas
+==========================================
+
+Fecha de creación: 20 de septiembre de 2025
+Sistema: Blueprint Analyzer v5.0

@@ -1,159 +1,967 @@
-<!DOCTYPE html>
-<html lang="es">
+<!doctype html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Servidor en Mantenimiento</title>
-  <style>
-    body {
-      margin: 0;
-      height: 100vh;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      flex-direction: column;
-      background: linear-gradient(135deg, #1e1e2f, #2a2a40);
-      font-family: 'Segoe UI', sans-serif;
-      color: #fff;
-      text-align: center;
-    }
-
-    h1 {
-      font-size: 2rem;
-      margin: 10px 0;
-    }
-
-    p {
-      font-size: 1.1rem;
-      opacity: 0.9;
-    }
-
-    .robot {
-      position: relative;
-      width: 120px;
-      height: 150px;
-      margin-bottom: 20px;
-      animation: float 3s ease-in-out infinite;
-    }
-
-    .head {
-      width: 80px;
-      height: 70px;
-      background: #00bcd4;
-      border-radius: 15px;
-      margin: 0 auto;
-      position: relative;
-    }
-
-    .eye {
-      width: 15px;
-      height: 15px;
-      background: #fff;
-      border-radius: 50%;
-      position: absolute;
-      top: 25px;
-      animation: blink 4s infinite;
-    }
-
-    .eye.left {
-      left: 15px;
-    }
-
-    .eye.right {
-      right: 15px;
-    }
-
-    .antenna {
-      width: 6px;
-      height: 20px;
-      background: #00bcd4;
-      margin: 0 auto;
-      position: relative;
-      top: -20px;
-    }
-
-    .antenna::after {
-      content: "";
-      width: 12px;
-      height: 12px;
-      background: #ff4081;
-      border-radius: 50%;
-      position: absolute;
-      left: -3px;
-      top: -10px;
-      animation: blink-light 1s infinite alternate;
-    }
-
-    .body {
-      width: 100px;
-      height: 60px;
-      background: #00bcd4;
-      margin: 10px auto;
-      border-radius: 10px;
-      position: relative;
-    }
-
-    .arm {
-      width: 15px;
-      height: 50px;
-      background: #00bcd4;
-      position: absolute;
-      top: 5px;
-      border-radius: 8px;
-      animation: move 2s infinite ease-in-out;
-    }
-
-    .arm.left {
-      left: -20px;
-    }
-
-    .arm.right {
-      right: -20px;
-      animation-delay: 1s;
-    }
-
-    @keyframes float {
-      0%, 100% { transform: translateY(0); }
-      50% { transform: translateY(-10px); }
-    }
-
-    @keyframes blink {
-      0%, 90%, 100% { height: 15px; }
-      95% { height: 3px; }
-    }
-
-    @keyframes blink-light {
-      from { background: #ff4081; }
-      to { background: #ff80ab; }
-    }
-
-    @keyframes move {
-      0%, 100% { transform: rotate(0); }
-      50% { transform: rotate(20deg); }
-    }
-
-    .footer {
-      margin-top: 20px;
-      font-weight: bold;
-      opacity: 0.8;
-    }
-  </style>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>STYLEYE - Management System</title>
+    
+    <!-- Tailwind CSS -->
+    <link rel="stylesheet" href="./dist/output.css">
+    
+    <!-- PDF.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    
+    <!-- Meta tags de seguridad -->
+    <meta name="robots" content="noindex, nofollow">
+    <meta http-equiv="X-Content-Type-Options" content="nosniff">
+    <meta http-equiv="X-XSS-Protection" content="1; mode=block">
+    
+    <style>
+        /* Fallback styles si Tailwind no carga */
+        body { 
+            font-family: system-ui, -apple-system, sans-serif; 
+            margin: 0; 
+            background: #0f172a; 
+            color: white;
+        }
+        .bg-slate-900 { background-color: #0f172a; }
+        .bg-slate-800 { background-color: #1e293b; }
+        .text-white { color: white; }
+        .hidden { display: none !important; }
+        
+        /* Transiciones suaves para evitar freezing */
+        .main-app-transition {
+            transition: opacity 0.3s ease-in-out;
+        }
+        
+        .fade-in {
+            opacity: 0;
+            animation: fadeIn 0.3s ease-in-out forwards;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        /* Estilos para el login overlay moderno */
+        #auth-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, #1e40af 0%, #0f172a 100%);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            overflow: hidden;
+            transition: opacity 0.3s ease-in-out;
+        }
+        
+        #auth-overlay::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse"><path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/></pattern></defs><rect width="100" height="100" fill="url(%23grid)"/></svg>');
+            opacity: 0.3;
+        }
+        
+        #login-container {
+            position: relative;
+            z-index: 10;
+            display: flex;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            border-radius: 24px;
+            overflow: hidden;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            max-width: 900px;
+            width: 90%;
+            min-height: 500px;
+        }
+        
+        #left-panel {
+            background: linear-gradient(135deg, #ffffff 0%, #e0f2fe 30%, #81d4fa 70%, #2196f3 100%);
+            padding: 3rem 2rem;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            width: 40%;
+            position: relative;
+            box-shadow: inset 0 0 50px rgba(33, 150, 243, 0.1);
+        }
+        
+        #left-panel::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><circle cx="100" cy="100" r="80" fill="none" stroke="rgba(33,150,243,0.2)" stroke-width="2"/><circle cx="100" cy="100" r="60" fill="none" stroke="rgba(33,150,243,0.15)" stroke-width="1"/><circle cx="100" cy="100" r="40" fill="none" stroke="rgba(33,150,243,0.1)" stroke-width="1"/></svg>');
+            background-size: 150px 150px;
+            background-position: center;
+            background-repeat: no-repeat;
+            opacity: 0.6;
+        }
+        
+        #styleye-logo {
+            position: relative;
+            z-index: 2;
+            width: 80px;
+            height: 80px;
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        #styleye-logo svg {
+            width: 40px;
+            height: 40px;
+            color: #1e40af;
+        }
+        
+        #left-panel h1 {
+            position: relative;
+            z-index: 2;
+            color: #1565c0;
+            font-size: 2.5rem;
+            font-weight: 800;
+            margin: 0 0 1rem 0;
+            letter-spacing: -0.025em;
+            text-shadow: 0 2px 4px rgba(21, 101, 192, 0.1);
+        }
+        
+        #left-panel p {
+            position: relative;
+            z-index: 2;
+            color: #424242;
+            font-size: 1rem;
+            line-height: 1.6;
+            margin: 0 0 2rem 0;
+            font-weight: 500;
+        }
+        
+        #signup-link {
+            position: relative;
+            z-index: 2;
+            color: #1976d2;
+            text-decoration: none;
+            font-size: 0.9rem;
+            border-bottom: 1px solid transparent;
+            transition: all 0.3s ease;
+            font-weight: 600;
+        }
+        
+        #signup-link:hover {
+            color: #0d47a1;
+            border-bottom-color: rgba(13, 71, 161, 0.5);
+        }
+        
+        #right-panel {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 3rem 2.5rem;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            width: 60%;
+        }
+        
+        #auth-form {
+            width: 100%;
+            max-width: 400px;
+            margin: 0 auto;
+        }
+        
+        #auth-form h2 {
+            color: #1f2937;
+            font-size: 1.875rem;
+            font-weight: 700;
+            text-align: left;
+            margin: 0 0 0.5rem 0;
+        }
+        
+        #auth-form .subtitle {
+            color: #6b7280;
+            font-size: 0.875rem;
+            margin-bottom: 2rem;
+        }
+        
+        .input-group {
+            position: relative;
+            margin-bottom: 1.5rem;
+        }
+        
+        .input-group svg:not(.password-toggle) {
+            position: absolute;
+            left: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 20px;
+            height: 20px;
+            color: #9ca3af;
+            z-index: 2;
+        }
+        
+        .input-group input {
+            width: 100%;
+            padding: 1rem 1rem 1rem 3rem;
+            border: 2px solid #e5e7eb;
+            border-radius: 12px;
+            box-sizing: border-box;
+            font-size: 0.875rem;
+            transition: all 0.3s ease;
+            background: white;
+            color: #374151;
+            caret-color: #3b82f6;
+        }
+        
+        .input-group input::placeholder {
+            color: #9ca3af;
+        }
+        
+        .input-group.password-field input {
+            padding-right: 3.5rem;
+        }
+        
+        .input-group input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+            color: #111827;
+            caret-color: #3b82f6;
+        }
+        
+        .password-toggle {
+            position: absolute;
+            right: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            cursor: pointer;
+            color: #9ca3af;
+            z-index: 3;
+            width: 20px;
+            height: 20px;
+            left: auto !important;
+        }
+        
+        .password-toggle:hover {
+            color: #6b7280;
+        }
+        
+        .form-options {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            font-size: 0.875rem;
+        }
+        
+        .remember-me {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: #6b7280;
+        }
+        
+        .remember-me input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            margin: 0;
+        }
+        
+        .forgot-password {
+            color: #3b82f6;
+            text-decoration: none;
+            transition: color 0.3s ease;
+        }
+        
+        .forgot-password:hover {
+            color: #2563eb;
+        }
+        
+        #login-button {
+            width: 100%;
+            background: linear-gradient(135deg, #2196f3 0%, #1565c0 100%);
+            color: white;
+            padding: 1rem;
+            border: 2px solid rgba(33, 150, 243, 0.3);
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(33, 150, 243, 0.3);
+            backdrop-filter: blur(10px);
+        }
+        
+        #login-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(33, 150, 243, 0.5);
+            background: linear-gradient(135deg, #1976d2 0%, #0d47a1 100%);
+            border-color: rgba(33, 150, 243, 0.5);
+        }
+        
+        #login-button:active {
+            transform: translateY(0);
+            box-shadow: 0 4px 15px rgba(33, 150, 243, 0.6);
+        }
+        
+        /* Responsive design */
+        @media (max-width: 768px) {
+            #login-container {
+                flex-direction: column;
+                max-width: 400px;
+                min-height: auto;
+            }
+            
+            #left-panel,
+            #right-panel {
+                width: 100%;
+            }
+            
+            #left-panel {
+                padding: 2rem 1.5rem;
+            }
+            
+            #right-panel {
+                padding: 2rem 1.5rem;
+            }
+            
+            #left-panel h1 {
+                font-size: 2rem;
+            }
+        }
+        
+        /* Asegurar que el área de componentes use el fondo original */
+        #app-content {
+            background: #0B0F14 !important;
+            min-height: 100vh;
+            width: 100%;
+        }
+        
+        /* Permitir que los componentes usen todo el espacio */
+        #main-app main {
+            padding: 0 !important;
+            margin: 0 !important;
+        }
+        
+        /* Asegurar que los botones del sidebar sean visibles */
+        [data-aside] nav a {
+            display: flex !important;
+            align-items: center !important;
+            color: #cbd5e1 !important;
+            text-decoration: none !important;
+        }
+        
+        [data-aside] nav a:hover {
+            background-color: rgba(255, 255, 255, 0.05) !important;
+            color: white !important;
+        }
+        
+        /* Asegurar que las secciones sean visibles */
+        [data-section] {
+            color: rgba(148, 163, 184, 0.7) !important;
+            font-size: 11px !important;
+            text-transform: uppercase !important;
+        }
+        
+        .auth-message {
+            padding: 0.75rem;
+            margin-bottom: 1rem;
+            border-radius: 0.5rem;
+            display: none;
+        }
+        
+        .auth-message.error {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+        
+        .auth-message.success {
+            background: #d1fae5;
+            color: #047857;
+        }
+    </style>
 </head>
-<body>
-  <div class="robot">
-    <div class="antenna"></div>
-    <div class="head">
-      <div class="eye left"></div>
-      <div class="eye right"></div>
-    </div>
-    <div class="body">
-      <div class="arm left"></div>
-      <div class="arm right"></div>
-    </div>
-  </div>
 
-  <h1>Servidor fuera de servicio temporalmente</h1>
-  <p>Estamos trabajando para mejorar tu experiencia.<br>Gracias por entender.</p>
-  <div class="footer">GRUPO SCALE UP</div>
+<body class="bg-slate-900">
+    <!-- Login Overlay (initially hidden) -->
+    <div id="auth-overlay">
+        <div id="login-container">
+            <!-- Panel izquierdo con branding -->
+            <div id="left-panel">
+                <div id="styleye-logo">
+                    <div style="
+                        width: 120px !important; 
+                        height: 120px !important; 
+                        min-width: 120px;
+                        min-height: 120px;
+                        max-width: 120px;
+                        max-height: 120px;
+                        border-radius: 60px !important; 
+                        background: rgba(33, 150, 243, 0.1); 
+                        backdrop-filter: blur(10px);
+                        border: 2px solid rgba(33, 150, 243, 0.3);
+                        display: flex; 
+                        align-items: center; 
+                        justify-content: center;
+                        box-shadow: 0 8px 32px rgba(33, 150, 243, 0.2);
+                        transition: transform 0.3s ease, box-shadow 0.3s ease;
+                        overflow: hidden;
+                        flex-shrink: 0;
+                        box-sizing: border-box;
+                    " onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 12px 40px rgba(33, 150, 243, 0.3)'" 
+                       onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 8px 32px rgba(33, 150, 243, 0.2)'">
+                        <img src="./assets/STEELEYE.png" alt="STYLEYE Logo" style="
+                            width: 110px !important; 
+                            height: 110px !important; 
+                            min-width: 110px;
+                            min-height: 110px;
+                            max-width: 110px;
+                            max-height: 110px;
+                            object-fit: cover;
+                            object-position: center;
+                            filter: brightness(1.1) contrast(1.1);
+                            border-radius: 55px !important;
+                            flex-shrink: 0;
+                        ">
+                    </div>
+                </div>
+                <h1>STYLEYE</h1>
+                <p>Advanced project management system with intelligent blueprint analysis and cost estimation.</p>
+                <a href="#" id="signup-link">Don't have an account? Sign up</a>
+            </div>
+            
+            <!-- Panel derecho con formulario -->
+            <div id="right-panel">
+                <form id="auth-form">
+                    <h2>Sign In</h2>
+                    <p class="subtitle">Access your account to continue</p>
+                    
+                    <div id="auth-message" class="auth-message"></div>
+                    
+                    <div class="input-group">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                        </svg>
+                        <input type="email" id="email" placeholder="Username" autocomplete="email" required>
+                    </div>
+                    
+                    <div class="input-group password-field">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M18,8h-1V6c0-2.76-2.24-5-5-5S7,3.24,7,6v2H6c-1.1,0-2,0.9-2,2v10c0,1.1,0.9,2,2,2h12c1.1,0,2-0.9,2-2V10 C20,8.9,19.1,8,18,8z M12,17c-1.1,0-2-0.9-2-2s0.9-2,2-2s2,0.9,2,2S13.1,17,12,17z M15.1,8H8.9V6c0-1.71,1.39-3.1,3.1-3.1 s3.1,1.39,3.1,3.1V8z"/>
+                        </svg>
+                        <input type="password" id="password" placeholder="••••••••••••" autocomplete="current-password" required>
+                        <svg class="password-toggle" viewBox="0 0 24 24" fill="currentColor" onclick="togglePassword()">
+                            <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
+                        </svg>
+                    </div>
+                    
+                    <div class="form-options">
+                        <label class="remember-me">
+                            <input type="checkbox" id="remember-me">
+                            <span>Remember me</span>
+                        </label>
+                        <a href="#" class="forgot-password">Forgot password?</a>
+                    </div>
+                    
+                    <button type="submit" id="login-button">LOGIN</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tu aplicación principal (inicialmente oculta) -->
+    <div id="main-app" class="hidden">
+        <!-- Main container with your original sidebar and content -->
+        <div class="flex min-h-screen">
+            <!-- Tu sidebar original -->
+            <div id="sidebar-container" data-component="asidebar"></div>
+
+            <!-- Main content area where components are loaded -->
+            <main id="main-content" class="flex-1 bg-slate-900" style="padding: 0; margin: 0; margin-left: 280px; transition: margin-left 200ms;">
+                <div id="app-content" data-component="dashboard" style="width: 100%; min-height: 100vh; background: #0B0F14;">
+                    <!-- Components will be loaded here dynamically -->
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Scripts del sistema de autenticación -->
+    <script src="./js/security.js"></script>
+    <script src="./js/auth.js"></script>
+    
+    <!-- Tu sistema principal de componentes -->
+    <script type="module" src="./js/main.js"></script>
+    
+    <!-- Script de inicialización y autenticación -->
+    <script>
+        // Función para toggle de contraseña
+        function togglePassword() {
+            const passwordInput = document.getElementById('password');
+            const passwordToggle = document.querySelector('.password-toggle');
+            
+            if (passwordInput.type === 'password') {
+                passwordInput.type = 'text';
+                passwordToggle.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22"/>';
+            } else {
+                passwordInput.type = 'password';
+                passwordToggle.innerHTML = '<path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>';
+            }
+        }
+        
+        let authSystem = null;
+        let isAuthenticated = false;
+
+        // Función para mostrar mensajes
+        function showMessage(message, type = 'error') {
+            const messageDiv = document.getElementById('auth-message');
+            messageDiv.textContent = message;
+            messageDiv.className = `auth-message ${type}`;
+            messageDiv.style.display = 'block';
+            
+            if (type === 'success') {
+                setTimeout(() => {
+                    messageDiv.style.display = 'none';
+                }, 2000);
+            }
+        }
+
+        // Function to show the main application
+        function showMainApp() {
+            console.log('🎯 Showing main app...');
+            
+            // Hide login overlay IMMEDIATELY
+            const authOverlay = document.getElementById('auth-overlay');
+            const mainApp = document.getElementById('main-app');
+            
+            if (authOverlay) {
+                authOverlay.style.display = 'none';
+            }
+            
+            if (mainApp) {
+                mainApp.classList.remove('hidden');
+                mainApp.style.opacity = '1';
+            }
+            
+            // Load EVERYTHING immediately
+            loadMainContent();
+        }
+        
+        // Separate function to load all content immediately
+        async function loadMainContent() {
+            // Load sidebar immediately
+            const sidebarContainer = document.getElementById('sidebar-container');
+            if (sidebarContainer) {
+                try {
+                    const module = await import('./js/components/asidebar/asidebar.js');
+                    const mountFn = module.default || module.mount || module.createComponent;
+                    if (mountFn) {
+                        const currentUser = window.authSystem ? window.authSystem.getCurrentUser() : null;
+                        const userProfile = currentUser ? {
+                            name: currentUser.name,
+                            email: currentUser.email,
+                            initials: currentUser.name.split(' ').map(n => n[0]).join('').toUpperCase()
+                        } : {
+                            name: 'User',
+                            email: 'user@blueprint.com',
+                            initials: 'U'
+                        };
+                        
+                        const sidebarProps = {
+                            brand: "Blueprint Analyzer v5.0",
+                            profile: userProfile,
+                            items: [
+                                {
+                                    section: "Overview",
+                                    items: [
+                                        { label: "Dashboard", href: "#dashboard", icon: "dashboard" },
+                                        { label: "Project Management", href: "#project-management", icon: "folder" }
+                                    ]
+                                },
+                                {
+                                    section: "Analysis", 
+                                    items: [
+                                        { label: "Blueprint Analyzer", href: "#blueprint-analyzer", icon: "search" },
+                                        { label: "Material & Labor", href: "#material-labor", icon: "hammer" }
+                                    ]
+                                },
+                                {
+                                    section: "Financial",
+                                    items: [
+                                        { label: "Cost Estimation & Budget Control", href: "#cost-budget", icon: "dollar" }
+                                    ]
+                                },
+                                {
+                                    section: "Reporting",
+                                    items: [
+                                        { label: "Reports", href: "#reports", icon: "chart" },
+                                        { label: "Suppliers", href: "#suppliers", icon: "truck" }
+                                    ]
+                                }
+                            ]
+                        };
+                        
+                        const result = await mountFn(sidebarContainer, sidebarProps);
+                        sidebarContainer.__component = {
+                            name: 'asidebar',
+                            mounted: true,
+                            destroy: result?.destroy,
+                            instance: result
+                        };
+                    }
+                } catch (error) {
+                    console.error('Error loading sidebar:', error);
+                }
+            }
+            
+            // Load main content immediately
+            const appContent = document.getElementById('app-content');
+            if (appContent) {
+                appContent.setAttribute('data-component', 'dashboard');
+                
+                try {
+                    const mainModule = await import('./js/main.js');
+                    if (mainModule.mountComponent) {
+                        await mainModule.mountComponent(appContent);
+                        console.log('✅ Dashboard loaded');
+                    } else {
+                        throw new Error('mountComponent not found');
+                    }
+                } catch (error) {
+                    console.error('❌ Dashboard failed, loading fallback:', error);
+                    // FALLBACK INMEDIATO
+                    appContent.innerHTML = `
+                        <div class="min-h-screen bg-slate-900 p-6">
+                            <div class="max-w-7xl mx-auto">
+                                <div class="mb-8">
+                                    <h1 class="text-3xl font-bold text-white mb-2">Dashboard</h1>
+                                    <p class="text-slate-400">Bienvenido al sistema Blueprint Analyzer</p>
+                                </div>
+                                
+                                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                                    <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+                                        <div class="flex items-center justify-between">
+                                            <div>
+                                                <p class="text-slate-400 text-sm font-medium">Total Proyectos</p>
+                                                <p class="text-2xl font-bold text-white">12</p>
+                                            </div>
+                                            <div class="w-12 h-12 bg-blue-500/20 rounded-lg flex items-center justify-center">
+                                                <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                                                </svg>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+                                        <div class="flex items-center justify-between">
+                                            <div>
+                                                <p class="text-slate-400 text-sm font-medium">Planos Analizados</p>
+                                                <p class="text-2xl font-bold text-white">48</p>
+                                            </div>
+                                            <div class="w-12 h-12 bg-green-500/20 rounded-lg flex items-center justify-center">
+                                                <svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                                                </svg>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+                                        <div class="flex items-center justify-between">
+                                            <div>
+                                                <p class="text-slate-400 text-sm font-medium">Presupuesto Total</p>
+                                                <p class="text-2xl font-bold text-white">$2.4M</p>
+                                            </div>
+                                            <div class="w-12 h-12 bg-yellow-500/20 rounded-lg flex items-center justify-center">
+                                                <svg class="w-6 h-6 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"></path>
+                                                </svg>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+                                        <div class="flex items-center justify-between">
+                                            <div>
+                                                <p class="text-slate-400 text-sm font-medium">Reportes</p>
+                                                <p class="text-2xl font-bold text-white">8</p>
+                                            </div>
+                                            <div class="w-12 h-12 bg-purple-500/20 rounded-lg flex items-center justify-center">
+                                                <svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                                                </svg>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                    <div class="bg-slate-800 rounded-lg border border-slate-700">
+                                        <div class="p-6 border-b border-slate-700">
+                                            <h3 class="text-lg font-semibold text-white">Proyectos Recientes</h3>
+                                        </div>
+                                        <div class="p-6">
+                                            <div class="space-y-4">
+                                                <div class="flex items-center justify-between p-3 bg-slate-700/50 rounded-lg">
+                                                    <div>
+                                                        <p class="text-white font-medium">Torre Residencial Norte</p>
+                                                        <p class="text-slate-400 text-sm">En progreso • 75%</p>
+                                                    </div>
+                                                    <div class="text-green-400 text-sm font-medium">$850K</div>
+                                                </div>
+                                                <div class="flex items-center justify-between p-3 bg-slate-700/50 rounded-lg">
+                                                    <div>
+                                                        <p class="text-white font-medium">Centro Comercial Plaza</p>
+                                                        <p class="text-slate-400 text-sm">Planificación • 25%</p>
+                                                    </div>
+                                                    <div class="text-yellow-400 text-sm font-medium">$1.2M</div>
+                                                </div>
+                                                <div class="flex items-center justify-between p-3 bg-slate-700/50 rounded-lg">
+                                                    <div>
+                                                        <p class="text-white font-medium">Complejo Oficinas Sur</p>
+                                                        <p class="text-slate-400 text-sm">Completado • 100%</p>
+                                                    </div>
+                                                    <div class="text-blue-400 text-sm font-medium">$650K</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="bg-slate-800 rounded-lg border border-slate-700">
+                                        <div class="p-6 border-b border-slate-700">
+                                            <h3 class="text-lg font-semibold text-white">Acciones Rápidas</h3>
+                                        </div>
+                                        <div class="p-6">
+                                            <div class="grid grid-cols-2 gap-4">
+                                                <button onclick="document.dispatchEvent(new CustomEvent('ui:navigate', {detail: {href: '#blueprint-analyzer'}}))" 
+                                                        class="flex flex-col items-center justify-center p-4 bg-blue-500/20 hover:bg-blue-500/30 rounded-lg border border-blue-500/30 transition-all duration-200">
+                                                    <svg class="w-8 h-8 text-blue-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                                                    </svg>
+                                                    <span class="text-blue-300 text-sm font-medium">Analizar Plano</span>
+                                                </button>
+                                                
+                                                <button onclick="document.dispatchEvent(new CustomEvent('ui:navigate', {detail: {href: '#project-management'}}))" 
+                                                        class="flex flex-col items-center justify-center p-4 bg-green-500/20 hover:bg-green-500/30 rounded-lg border border-green-500/30 transition-all duration-200">
+                                                    <svg class="w-8 h-8 text-green-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                                                    </svg>
+                                                    <span class="text-green-300 text-sm font-medium">Nuevo Proyecto</span>
+                                                </button>
+                                                
+                                                <button onclick="document.dispatchEvent(new CustomEvent('ui:navigate', {detail: {href: '#cost-budget'}}))" 
+                                                        class="flex flex-col items-center justify-center p-4 bg-yellow-500/20 hover:bg-yellow-500/30 rounded-lg border border-yellow-500/30 transition-all duration-200">
+                                                    <svg class="w-8 h-8 text-yellow-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"></path>
+                                                    </svg>
+                                                    <span class="text-yellow-300 text-sm font-medium">Presupuesto</span>
+                                                </button>
+                                                
+                                                <button onclick="document.dispatchEvent(new CustomEvent('ui:navigate', {detail: {href: '#reports'}}))" 
+                                                        class="flex flex-col items-center justify-center p-4 bg-purple-500/20 hover:bg-purple-500/30 rounded-lg border border-purple-500/30 transition-all duration-200">
+                                                    <svg class="w-8 h-8 text-purple-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                                                    </svg>
+                                                    <span class="text-purple-300 text-sm font-medium">Ver Reportes</span>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                console.log('✅ Main content loaded');
+            }
+        }
+
+        // Función para mostrar el login
+        function showLogin() {
+            const authOverlay = document.getElementById('auth-overlay');
+            const mainApp = document.getElementById('main-app');
+            
+            if (authOverlay) {
+                authOverlay.style.display = 'flex';
+            }
+            if (mainApp) {
+                mainApp.classList.add('hidden');
+            }
+        }
+
+        // Inicializar el sistema
+        async function initApp() {
+            try {
+                // Check if AuthSystem is available
+                if (typeof AuthSystem !== 'undefined') {
+                    console.log('Initializing AuthSystem...');
+                    authSystem = new AuthSystem();
+                    await new Promise(resolve => setTimeout(resolve, 100)); // minimal delay
+                    
+                    // Check existing session
+                    if (authSystem.isLoggedIn()) {
+                        console.log('Active session found');
+                        isAuthenticated = true;
+                        // Show immediately - NO DELAYS
+                        showMainApp();
+                        return;
+                    }
+                    
+                    console.log('No active session, showing login');
+                    showLogin();
+                } else {
+                    console.warn('AuthSystem not available, showing app without authentication');
+                    // If no auth system, show app directly
+                    const mainApp = document.getElementById('main-app');
+                    if (mainApp) {
+                        mainApp.classList.remove('hidden');
+                    }
+                }
+                
+            } catch (error) {
+                console.error('Error during initialization:', error);
+                // If error, show app without authentication
+                const mainApp = document.getElementById('main-app');
+                if (mainApp) {
+                    mainApp.classList.remove('hidden');
+                }
+            }
+        }
+
+        // Event listeners
+        document.addEventListener('DOMContentLoaded', () => {
+            // Login form
+            document.getElementById('auth-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                
+                if (!authSystem) {
+                    showMessage('Authentication system not available');
+                    return;
+                }
+                
+                const email = document.getElementById('email').value.trim();
+                const password = document.getElementById('password').value;
+                
+                if (!email || !password) {
+                    showMessage('Please complete all fields');
+                    return;
+                }
+                
+                // Show loading state
+                const submitBtn = e.target.querySelector('button[type="submit"]');
+                const originalText = submitBtn.textContent;
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Autenticando...';
+                
+                try {
+                    const result = await authSystem.login(email, password);
+                    
+                    if (result.success) {
+                        isAuthenticated = true;
+                        showMessage(`¡Bienvenido ${result.user.name}!`, 'success');
+                        
+                        // Show immediately - NO DELAYS
+                        showMainApp();
+                    } else {
+                        showMessage(result.message);
+                        // Reset button state on error
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = originalText;
+                    }
+                } catch (error) {
+                    showMessage('Error de autenticación');
+                    console.error('Login error:', error);
+                    // Reset button state on error
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = originalText;
+                }
+            });
+
+            // Listen for logout event from sidebar
+            document.addEventListener('ui:logout', () => {
+                if (authSystem) {
+                    authSystem.logout();
+                }
+                isAuthenticated = false;
+                showLogin();
+            });
+
+            // Listen for navigation events
+            document.addEventListener('ui:navigate', async (e) => {
+                const { href } = e.detail;
+                console.log(`🧭 Navigation to: ${href}`);
+                
+                // Extract component from href (#component-name)
+                const component = href.replace('#', '');
+                
+                // Update main content area
+                const appContent = document.getElementById('app-content');
+                if (appContent && component) {
+                    appContent.setAttribute('data-component', component);
+                    
+                    // Try to load the component
+                    try {
+                        const mainModule = await import('./js/main.js');
+                        if (mainModule.mountComponent) {
+                            await mainModule.mountComponent(appContent);
+                            console.log(`✅ Component '${component}' loaded successfully`);
+                        }
+                    } catch (error) {
+                        console.error(`❌ Error loading component '${component}':`, error);
+                        // Show a simple fallback
+                        appContent.innerHTML = `
+                            <div class="flex items-center justify-center min-h-screen bg-slate-900">
+                                <div class="text-center p-8">
+                                    <h2 class="text-2xl font-bold text-white mb-4">${component.charAt(0).toUpperCase() + component.slice(1).replace('-', ' ')}</h2>
+                                    <p class="text-slate-300">Componente en desarrollo</p>
+                                </div>
+                            </div>
+                        `;
+                    }
+                }
+            });
+
+            // Listen for sidebar toggle to adjust main content margin
+            document.addEventListener('ui:sidebar:toggle', (e) => {
+                const { expanded } = e.detail;
+                const mainContent = document.getElementById('main-content');
+                if (mainContent) {
+                    mainContent.style.marginLeft = expanded ? '280px' : '72px';
+                }
+            });
+
+            // Set initial margin based on sidebar state
+            setTimeout(() => {
+                const sidebar = document.querySelector('[data-aside]');
+                const mainContent = document.getElementById('main-content');
+                if (sidebar && mainContent) {
+                    const isExpanded = sidebar.dataset.state === 'expanded';
+                    mainContent.style.marginLeft = isExpanded ? '280px' : '72px';
+                }
+            }, 300);
+
+            // Initialize the application
+            initApp(); // NO DELAYS
+        });
+
+        // Make available for component system
+        window.isAuthenticated = () => isAuthenticated;
+    </script>
 </body>
 </html>

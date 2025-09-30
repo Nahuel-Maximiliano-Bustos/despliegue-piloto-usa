@@ -83,8 +83,8 @@ class AuthSystem {
         if (session.expiresAt > now) {
           this.currentUser = session.user;
           this.startSessionTimer();
-          // Emitir evento de login para sesión recuperada después de la inicialización completa
-          setTimeout(() => this.dispatchLoginEvent(), 1000);
+          // Emitir evento inmediatamente - SIN DELAYS
+          this.dispatchLoginEvent();
           return true;
         } else {
           localStorage.removeItem('blueprint_session');
@@ -168,7 +168,11 @@ class AuthSystem {
 
     this.createSession();
     this.startSessionTimer();
-    this.dispatchLoginEvent();
+    
+    // Delay antes de disparar el evento para evitar conflictos de UI
+    setTimeout(() => {
+      this.dispatchLoginEvent();
+    }, 100);
 
     return { 
       success: true, 

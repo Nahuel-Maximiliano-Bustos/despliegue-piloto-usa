@@ -27,6 +27,10 @@ export default async function mount(el, props = {}) {
   let showGrid = false;
   let showRulers = false;
   let autoFitOnResize = true; // NUEVO: para responsive
+  let zoomLocked = false; // NUEVO: controlar bloqueo de zoom
+  let manualCountMode = false; // NUEVO: modo conteo manual
+  let deleteMode = false; // NUEVO: modo eliminación manual
+  let hasDetectionRun = false; // NUEVO: controlar si se ha ejecutado detección
 
   // Estado de documento
   let pdfDoc = null;
@@ -95,6 +99,11 @@ export default async function mount(el, props = {}) {
   .thumb-select input:checked{ background:var(--ok); border-color:var(--ok); }
   .toolbar-btn[aria-pressed="true"]{ outline:2px solid #4f46e5; border-radius:8px; }
   .cursor-hand{ cursor: grab; } .cursor-pen{ cursor: crosshair; } .cursor-erase{ cursor: cell; }
+  .cursor-manual-count{ cursor: crosshair !important; }
+  .cursor-delete{ cursor: pointer !important; }
+  .bp-btn.locked{ background: #ef4444; color: white; border-color: #ef4444; }
+  .bp-btn.active-manual{ background: #10b981; color: white; border-color: #10b981; }
+  .bp-btn.active-delete{ background: #dc2626; color: white; border-color: #dc2626; }
   .bp-page-wrap{ position:relative; display:inline-block; }
   .bp-stage{ position:relative; width:max-content; height:max-content; }
   .ruler-x,.ruler-y{ position:sticky; background:#0b1220; z-index:4; color:#64748b; font: 10px ui-sans-serif; }
@@ -576,6 +585,9 @@ export default async function mount(el, props = {}) {
             </label>
 
             <div class="ml-auto flex items-center gap-1">
+              <button data-role="lock-zoom" class="bp-btn" title="Bloquear/Desbloquear Zoom">🔓</button>
+              <button data-role="manual-count" class="bp-btn" title="Conteo Manual de Columnas">👆</button>
+              <button data-role="delete-mode" class="bp-btn" title="Eliminar Columnas Manualmente">🗑️</button>
               <button data-role="fit-width" class="bp-btn">Fit width</button>
               <button data-role="fit-page" class="bp-btn">Fit page</button>
               <button data-role="center-page" class="bp-btn">Center</button>
@@ -620,7 +632,7 @@ export default async function mount(el, props = {}) {
         <section class="bp-card overflow-hidden flex flex-col bp-col-thumbs">
           <div class="px-3 py-2 border-b border-slate-700 bg-slate-900 text-sm font-medium flex items-center gap-2">
             Thumbnails
-            <button data-role="detect-roi" class="ml-auto bp-btn brand text-sm">Detect in ROI</button>
+            <button data-role="detect-roi" class="ml-auto bp-btn brand text-sm">🎯 Detectar en Área</button>
           </div>
           <div class="flex-1 overflow-auto p-2"><div data-role="thumbs"></div></div>
         </section>
@@ -664,6 +676,10 @@ export default async function mount(el, props = {}) {
                 <span>+</span>
                 <span>Add Column</span>
               </button>
+              <button class="bp-btn" data-role="sync-columns" style="display: flex; align-items: center; gap: 0.5rem;" title="Sincronizar columnas">
+                <span>🔄</span>
+                <span>Sync</span>
+              </button>
               <button class="bp-btn" data-role="export-columns" style="display: flex; align-items: center; gap: 0.5rem;">
                 <span>📤</span>
                 <span>Export</span>
@@ -682,6 +698,7 @@ export default async function mount(el, props = {}) {
                 <option value="support">Support</option>
                 <option value="pillar">Pillar</option>
                 <option value="custom">Custom</option>
+                <option value="manual">Manual</option>
               </select>
             </div>
           </div>
@@ -730,30 +747,91 @@ export default async function mount(el, props = {}) {
       
       <!-- Modal de Dataset/YOLO -->
       <div class="bp-modal" data-role="dataset-modal">
-        <div class="bp-modal-content">
+        <div class="bp-modal-content" style="max-width: 600px;">
           <div class="bp-modal-header">
             <h3 style="margin: 0; color: var(--c-text);">Configuración de Detección</h3>
             <button class="bp-modal-close" data-role="close-dataset-modal">×</button>
           </div>
-          <div style="display: grid; gap: 1rem;">
+          <div style="display: grid; gap: 1rem; max-height: 60vh; overflow-y: auto; padding-right: 0.5rem;">
+            
+            <!-- Configuración básica -->
             <div class="bp-form-group">
               <label class="bp-form-label">Modelo de Detección</label>
               <select class="bp-form-select" data-role="detection-model">
-                <option value="vectorial">Vectorial (Actual)</option>
-                <option value="yolo8">YOLO v8 (Recomendado)</option>
-                <option value="hybrid">Híbrido (Vectorial + YOLO)</option>
+                <option value="vectorial">Vectorial - Cuadradito con Cerebro 🧠</option>
               </select>
             </div>
             <div class="bp-form-group">
               <label class="bp-form-label">Precisión Mínima (%)</label>
-              <input type="range" min="70" max="99" value="85" class="bp-form-input" data-role="confidence-threshold">
+              <input type="range" min="30" max="99" value="85" class="bp-form-input" data-role="confidence-threshold">
               <span style="font-size: 0.8rem; color: var(--c-dim);" data-role="confidence-value">85%</span>
             </div>
-            <div class="bp-form-group">
-              <label class="bp-form-label">Dataset Personalizado</label>
-              <input type="file" accept=".json,.yaml,.txt" class="bp-form-input" data-role="custom-dataset">
-              <span style="font-size: 0.8rem; color: var(--c-dim);">Formatos: JSON, YAML, TXT</span>
+            
+            <!-- Configuración avanzada del algoritmo vectorial -->
+            <div style="border-top: 1px solid var(--c-border); padding-top: 1rem; margin-top: 0.5rem;">
+              <h4 style="margin: 0 0 1rem 0; color: var(--c-text); font-size: 0.9rem;">Parámetros Avanzados (Algoritmo Vectorial)</h4>
+              
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <div class="bp-form-group">
+                  <label class="bp-form-label">Tolerancia Angular (°)</label>
+                  <input type="number" min="5" max="30" value="12" class="bp-form-input" data-role="angular-tolerance">
+                  <span style="font-size: 0.75rem; color: var(--c-dim);">Para detectar cuadrados</span>
+                </div>
+                <div class="bp-form-group">
+                  <label class="bp-form-label">Lado Mínimo (px)</label>
+                  <input type="number" min="5" max="100" value="12" class="bp-form-input" data-role="min-side-length">
+                  <span style="font-size: 0.75rem; color: var(--c-dim);">Tamaño mínimo</span>
+                </div>
+              </div>
+              
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <div class="bp-form-group">
+                  <label class="bp-form-label">Corte Derecho (%)</label>
+                  <input type="number" min="0" max="40" value="12" class="bp-form-input" data-role="right-cut-percent">
+                  <span style="font-size: 0.75rem; color: var(--c-dim);">Evitar rótulos</span>
+                </div>
+                <div class="bp-form-group">
+                  <label class="bp-form-label">Corte Superior (%)</label>
+                  <input type="number" min="0" max="40" value="6" class="bp-form-input" data-role="top-cut-percent">
+                  <span style="font-size: 0.75rem; color: var(--c-dim);">Evitar headers</span>
+                </div>
+              </div>
+              
+              <div class="bp-form-group">
+                <label class="bp-form-label">Relación Cuadrado Mínima</label>
+                <input type="range" min="0.5" max="1.0" step="0.01" value="0.70" class="bp-form-input" data-role="square-ratio-min">
+                <span style="font-size: 0.8rem; color: var(--c-dim);" data-role="square-ratio-value">0.70</span>
+              </div>
+              
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <div class="bp-form-group">
+                  <label class="bp-form-label">Longitud Grilla (%)</label>
+                  <input type="number" min="5" max="40" value="10" class="bp-form-input" data-role="grid-length-percent">
+                  <span style="font-size: 0.75rem; color: var(--c-dim);">Ejes estructurales</span>
+                </div>
+                <div class="bp-form-group">
+                  <label class="bp-form-label">Tolerancia Grilla (px)</label>
+                  <input type="number" min="4" max="30" value="10" class="bp-form-input" data-role="grid-tolerance">
+                  <span style="font-size: 0.75rem; color: var(--c-dim);">Clustering ejes</span>
+                </div>
+              </div>
+              
+              <div class="bp-form-group">
+                <label class="bp-form-label">Radio Búsqueda (× lado)</label>
+                <input type="range" min="1.0" max="4.0" step="0.1" value="2.2" class="bp-form-input" data-role="radius-multiplier">
+                <span style="font-size: 0.8rem; color: var(--c-dim);" data-role="radius-multiplier-value">2.2</span>
+              </div>
             </div>
+            
+            <!-- Dataset personalizado -->
+            <div style="border-top: 1px solid var(--c-border); padding-top: 1rem;">
+              <div class="bp-form-group">
+                <label class="bp-form-label">Dataset Personalizado</label>
+                <input type="file" accept=".json,.yaml,.txt" class="bp-form-input" data-role="custom-dataset">
+                <span style="font-size: 0.8rem; color: var(--c-dim);">Formatos: JSON, YAML, TXT</span>
+              </div>
+            </div>
+            
             <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
               <button type="button" class="bp-btn brand" data-role="apply-detection-config" style="flex: 1;">Aplicar</button>
               <button type="button" class="bp-btn" data-role="cancel-detection-config" style="flex: 1;">Cancelar</button>
@@ -808,6 +886,9 @@ export default async function mount(el, props = {}) {
   const btnSaveJSON = $("[data-role='save-json']");
   const btnZoomIn = $("[data-role='zoom-in']");
   const btnZoomOut = $("[data-role='zoom-out']");
+  const btnLockZoom = $("[data-role='lock-zoom']");
+  const btnManualCount = $("[data-role='manual-count']");
+  const btnDeleteMode = $("[data-role='delete-mode']");
   const zoomSlider = $("[data-role='zoom-slider']");
   const btnFitWidth = $("[data-role='fit-width']");
   const btnFitPage = $("[data-role='fit-page']");
@@ -899,6 +980,17 @@ export default async function mount(el, props = {}) {
     confidence: 0.85,
     customDataset: null,
     yoloModelPath: 'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/model.json',
+    
+    // Parámetros del algoritmo "cuadradito con cerebro"
+    angularTolerance: 12,      // Tolerancia angular para detectar cuadrados (grados)
+    minSideLength: 12,         // Mínimo lado en pixels
+    rightCutPercent: 12,       // Ignorar % derecho (evitar rótulos)
+    topCutPercent: 6,          // Corte superior % (evitar headers)
+    squareRatioMin: 0.70,      // Relación mínima cuadrado (min/max)
+    gridLengthPercent: 10,     // Longitud mínima ejes de grilla (% ancho/alto)
+    gridTolerance: 10,         // Tolerancia cluster ejes (px)
+    radiusMultiplier: 2.2,     // Radio búsqueda grilla (× lado)
+    
     datasetConfig: {
       columns: {
         structural: { confidence: 0.9, color: '#10b981' },
@@ -1074,10 +1166,16 @@ export default async function mount(el, props = {}) {
     const node = pageNodes.get(activePage);
     if (!node) return;
     const target = node.ann;
-    target.classList.remove("cursor-hand", "cursor-pen", "cursor-erase");
+    target.classList.remove("cursor-hand", "cursor-pen", "cursor-erase", "cursor-manual-count", "cursor-delete");
     if (["hand", "select"].includes(currentTool)) {
       target.classList.add("cursor-hand");
       target.style.pointerEvents = "none";
+    } else if (currentTool === "manual-count") {
+      target.classList.add("cursor-manual-count");
+      target.style.pointerEvents = "auto";
+    } else if (currentTool === "delete-mode") {
+      target.classList.add("cursor-delete");
+      target.style.pointerEvents = "auto";
     } else if (["erase", "lassoerase"].includes(currentTool)) {
       target.classList.add("cursor-erase");
       target.style.pointerEvents = "auto";
@@ -1259,12 +1357,26 @@ export default async function mount(el, props = {}) {
     const detectionModel = $("[data-role='detection-model']");
     const customDataset = $("[data-role='custom-dataset']");
     
+    // Nuevos campos de configuración avanzada
+    const angularTolerance = $("[data-role='angular-tolerance']");
+    const minSideLength = $("[data-role='min-side-length']");
+    const rightCutPercent = $("[data-role='right-cut-percent']");
+    const topCutPercent = $("[data-role='top-cut-percent']");
+    const squareRatioMin = $("[data-role='square-ratio-min']");
+    const squareRatioValue = $("[data-role='square-ratio-value']");
+    const gridLengthPercent = $("[data-role='grid-length-percent']");
+    const gridTolerance = $("[data-role='grid-tolerance']");
+    const radiusMultiplier = $("[data-role='radius-multiplier']");
+    const radiusMultiplierValue = $("[data-role='radius-multiplier-value']");
+    
     if (closeDatasetModal) {
       closeDatasetModal.addEventListener('click', hideDatasetModal);
     }
     if (cancelDetectionConfig) {
       cancelDetectionConfig.addEventListener('click', hideDatasetModal);
     }
+    
+    // Event listeners para sliders con valores dinámicos
     if (confidenceThreshold && confidenceValue) {
       confidenceThreshold.addEventListener('input', (e) => {
         const value = e.target.value;
@@ -1272,11 +1384,63 @@ export default async function mount(el, props = {}) {
       });
     }
     
+    if (squareRatioMin && squareRatioValue) {
+      squareRatioMin.addEventListener('input', (e) => {
+        const value = parseFloat(e.target.value);
+        squareRatioValue.textContent = value.toFixed(2);
+      });
+    }
+    
+    if (radiusMultiplier && radiusMultiplierValue) {
+      radiusMultiplier.addEventListener('input', (e) => {
+        const value = parseFloat(e.target.value);
+        radiusMultiplierValue.textContent = value.toFixed(1);
+      });
+    }
+    
+    // Inicializar valores desde configuración actual
+    function loadConfigToUI() {
+      if (detectionModel) detectionModel.value = detectionConfig.model;
+      if (confidenceThreshold) {
+        confidenceThreshold.value = Math.round(detectionConfig.confidence * 100);
+        if (confidenceValue) confidenceValue.textContent = `${Math.round(detectionConfig.confidence * 100)}%`;
+      }
+      if (angularTolerance) angularTolerance.value = detectionConfig.angularTolerance;
+      if (minSideLength) minSideLength.value = detectionConfig.minSideLength;
+      if (rightCutPercent) rightCutPercent.value = detectionConfig.rightCutPercent;
+      if (topCutPercent) topCutPercent.value = detectionConfig.topCutPercent;
+      if (squareRatioMin) {
+        squareRatioMin.value = detectionConfig.squareRatioMin;
+        if (squareRatioValue) squareRatioValue.textContent = detectionConfig.squareRatioMin.toFixed(2);
+      }
+      if (gridLengthPercent) gridLengthPercent.value = detectionConfig.gridLengthPercent;
+      if (gridTolerance) gridTolerance.value = detectionConfig.gridTolerance;
+      if (radiusMultiplier) {
+        radiusMultiplier.value = detectionConfig.radiusMultiplier;
+        if (radiusMultiplierValue) radiusMultiplierValue.textContent = detectionConfig.radiusMultiplier.toFixed(1);
+      }
+    }
+    
+    // Cargar configuración al abrir el modal
+    loadConfigToUI();
+    
     if (applyDetectionConfig) {
       applyDetectionConfig.addEventListener('click', async () => {
+        // Configuración básica
         if (detectionModel) detectionConfig.model = detectionModel.value;
         if (confidenceThreshold) detectionConfig.confidence = confidenceThreshold.value / 100;
         
+        // Configuración avanzada del algoritmo
+        if (angularTolerance) detectionConfig.angularTolerance = parseInt(angularTolerance.value);
+        if (minSideLength) detectionConfig.minSideLength = parseInt(minSideLength.value);
+        if (rightCutPercent) detectionConfig.rightCutPercent = parseInt(rightCutPercent.value);
+        if (topCutPercent) detectionConfig.topCutPercent = parseInt(topCutPercent.value);
+        if (squareRatioMin) detectionConfig.squareRatioMin = parseFloat(squareRatioMin.value);
+        if (gridLengthPercent) detectionConfig.gridLengthPercent = parseInt(gridLengthPercent.value);
+        if (gridTolerance) detectionConfig.gridTolerance = parseInt(gridTolerance.value);
+        if (radiusMultiplier) detectionConfig.radiusMultiplier = parseFloat(radiusMultiplier.value);
+        
+        // Dataset personalizado
         if (customDataset && customDataset.files[0]) {
           try {
             const file = customDataset.files[0];
@@ -1293,7 +1457,22 @@ export default async function mount(el, props = {}) {
         localStorage.setItem('bp_detection_config', JSON.stringify(detectionConfig));
         
         hideDatasetModal();
-        status(`✅ Configuración aplicada: ${detectionConfig.model} (${Math.round(detectionConfig.confidence * 100)}%)`);
+        status(`✅ Configuración aplicada: ${detectionConfig.model} (${Math.round(detectionConfig.confidence * 100)}%) 🧠`);
+        
+        // Actualizar indicador en la UI si es algoritmo vectorial optimizado
+        if (detectionConfig.model === 'vectorial') {
+          const statusEl = $("[data-role='status']");
+          if (statusEl) {
+            statusEl.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+            statusEl.style.color = 'white';
+            statusEl.innerHTML = '🧠 Algoritmo "Cuadradito con Cerebro" activado';
+            setTimeout(() => {
+              statusEl.style.background = '';
+              statusEl.style.color = '';
+              statusEl.innerHTML = 'Ready';
+            }, 3000);
+          }
+        }
       });
     }
   } catch (error) {
@@ -1398,7 +1577,7 @@ export default async function mount(el, props = {}) {
       drawROIOverlay(p);
     }
     renderCountsPanels();
-    renderColumnEditor(); // NUEVO: refrescar editor
+    // renderColumnEditor(); // COMENTADO: Solo mostrar después de detectar
   }
   projects = loadProjectsIndex();
   currentProject = projects.last;
@@ -1449,6 +1628,7 @@ export default async function mount(el, props = {}) {
   const columnsTableModal = $("[data-role='columns-table-modal']");
   const closeColumnsModal = $("[data-role='close-columns-modal']");
   const addColumnBtn = $("[data-role='add-column']");
+  const syncColumnsBtn = $("[data-role='sync-columns']");
   const exportColumnsBtn = $("[data-role='export-columns']");
   const importColumnsBtn = $("[data-role='import-columns']");
   const columnSearchInput = $("[data-role='column-search']");
@@ -1468,6 +1648,12 @@ export default async function mount(el, props = {}) {
     // Convertir de columnsByPage a detectedColumns para compatibilidad
     const currentPageColumns = columnsByPage.get(activePage) || [];
     
+    console.log(`🔄 Sincronizando página ${activePage}:`, {
+      before: detectedColumns.filter(c => c.page === activePage).length,
+      columnsByPageCount: currentPageColumns.length,
+      currentPageColumns
+    });
+    
     // Limpiar columnas de la página actual en detectedColumns
     for (let i = detectedColumns.length - 1; i >= 0; i--) {
       if (detectedColumns[i].page === activePage) {
@@ -1477,8 +1663,8 @@ export default async function mount(el, props = {}) {
     
     // Agregar columnas actuales
     currentPageColumns.forEach((col, index) => {
-      detectedColumns.push({
-        id: col.id || `COL_${activePage}_${index + 1}`,
+      const newDetectedCol = {
+        id: col.id || `C-${index + 1}`,
         x: col.x,
         y: col.y,
         width: col.w,
@@ -1486,13 +1672,19 @@ export default async function mount(el, props = {}) {
         page: activePage,
         type: col.type || 'structural',
         confidence: col.confidence || 0.85,
-        description: col.description || '',
+        description: col.description || `Column ${col.id || `C-${index + 1}`}`,
         material: col.material || '',
         unit: col.unit || 'count',
-        notes: col.notes || '',
-        color: col.color || '#6366f1'
-      });
+        notes: col.notes || col.note || col.id || `C-${index + 1}`,
+        color: col.color || '#6366f1',
+        manual: col.manual || false
+      };
+      
+      detectedColumns.push(newDetectedCol);
     });
+    
+    const afterCount = detectedColumns.filter(c => c.page === activePage).length;
+    console.log(`✅ Sincronización completada: ${afterCount} columnas en detectedColumns para página ${activePage}`);
   }
 
   // Función para sincronizar de detectedColumns a columnsByPage
@@ -1579,12 +1771,45 @@ export default async function mount(el, props = {}) {
 
   // Función para abrir el modal de tabla de columnas
   function openColumnsTableModal() {
-    // Sincronizar sistemas antes de abrir
-    syncColumnSystems();
+    console.log(`🚀 ABRIENDO MODAL - FORZANDO CARGA DE DATOS...`);
+    
+    // FUERZA BRUTA: leer de ambos sistemas
+    const pageColumns = columnsByPage.get(activePage) || [];
+    const detectedPageColumns = detectedColumns.filter(col => col.page === activePage);
+    
+    console.log(`� DATOS AL ABRIR MODAL:`, {
+      activePage,
+      columnsByPageCount: pageColumns.length,
+      detectedColumnsCount: detectedPageColumns.length,
+      hasDetectionRun
+    });
+    
+    // Si no hay datos en columnsByPage pero sí en detectedColumns, SINCRONIZAR AHORA
+    if (pageColumns.length === 0 && detectedPageColumns.length > 0) {
+      console.log("🔄 SINCRONIZANDO AL ABRIR MODAL...");
+      const syncedColumns = detectedPageColumns.map((col, index) => ({
+        id: col.id || `C-${index + 1}`,
+        type: col.type || 'structural',
+        x: col.x,
+        y: col.y,
+        w: col.width || 12,
+        h: col.height || 240,
+        confidence: col.confidence || 0.85,
+        note: col.notes || col.id,
+        manual: col.manual || false
+      }));
+      
+      columnsByPage.set(activePage, syncedColumns);
+      console.log(`✅ SINCRONIZADO: ${syncedColumns.length} columnas`);
+    }
     
     $("[data-role='active-page-num']").textContent = activePage;
     updateColumnsCount();
+    
+    // FORZAR regeneración de tabla
+    console.log("🔄 FORZANDO REGENERACIÓN DE TABLA...");
     generateColumnsTable();
+    
     columnsTableModal.classList.add('show');
   }
 
@@ -1597,9 +1822,72 @@ export default async function mount(el, props = {}) {
 
   // Función para generar la tabla de columnas
   function generateColumnsTable() {
-    const columns = detectedColumns.filter(col => col.page === activePage);
-    filteredColumns = filterColumns(columns);
+    console.log("🔄 Generando tabla de columnas...");
     
+    // FORZAR LECTURA DIRECTA DE LAS FUENTES DE DATOS
+    const columnsByPageData = columnsByPage.get(activePage) || [];
+    const detectedColumnsData = detectedColumns.filter(col => col.page === activePage);
+    
+    console.log(`� DATOS ENCONTRADOS:`, {
+      activePage,
+      columnsByPageCount: columnsByPageData.length,
+      detectedColumnsCount: detectedColumnsData.length,
+      hasDetectionRun
+    });
+    
+    // Si no hay datos y no se ha ejecutado detección, mostrar mensaje
+    if (!hasDetectionRun) {
+      columnsTableBody.innerHTML = `
+        <tr>
+          <td colspan="10" style="text-align: center; padding: 2rem; color: var(--c-dim);">
+            <div style="display: flex; flex-direction: column; align-items: center; gap: 1rem;">
+              <span style="font-size: 3rem;">🔍</span>
+              <p>Presiona "Detectar" para encontrar columnas</p>
+            </div>
+          </td>
+        </tr>
+      `;
+      return;
+    }
+    
+    // Usar la fuente de datos que tenga columnas
+    let sourceColumns = [];
+    
+    if (columnsByPageData.length > 0) {
+      console.log("✅ Usando columnsByPage como fuente");
+      sourceColumns = columnsByPageData.map((col, index) => ({
+        id: col.id || `C-${index + 1}`,
+        type: col.type || 'structural',
+        description: `Column ${col.id || `C-${index + 1}`}`,
+        width: col.w || 12,
+        height: col.h || 240,
+        x: Math.round(col.x),
+        y: Math.round(col.y),
+        confidence: Math.round((col.confidence || 0.85) * 100),
+        material: col.material || '',
+        unit: col.unit || 'count',
+        manual: col.manual || false
+      }));
+    } else if (detectedColumnsData.length > 0) {
+      console.log("✅ Usando detectedColumns como fuente");
+      sourceColumns = detectedColumnsData.map((col, index) => ({
+        id: col.id || `C-${index + 1}`,
+        type: col.type || 'structural',
+        description: col.description || `Column ${col.id || `C-${index + 1}`}`,
+        width: col.width || 12,
+        height: col.height || 240,
+        x: Math.round(col.x),
+        y: Math.round(col.y),
+        confidence: Math.round((col.confidence || 0.85) * 100),
+        material: col.material || '',
+        unit: col.unit || 'count',
+        manual: col.manual || false
+      }));
+    }
+    
+    console.log(`� Procesando ${sourceColumns.length} columnas para la tabla`);
+    
+    filteredColumns = filterColumns(sourceColumns);
     columnsTableBody.innerHTML = '';
     
     if (filteredColumns.length === 0) {
@@ -1609,7 +1897,8 @@ export default async function mount(el, props = {}) {
             <div style="display: flex; flex-direction: column; align-items: center; gap: 1rem;">
               <span style="font-size: 3rem;">📋</span>
               <p>No columns found on this page</p>
-              <button class="bp-btn brand" onclick="runColumnDetection()">Detect Columns</button>
+              <p style="font-size: 0.9rem; color: var(--c-dim);">ColumnsByPage: ${columnsByPageData.length} | DetectedColumns: ${detectedColumnsData.length}</p>
+              <button class="bp-btn" onclick="window.forceTableRefresh()" style="background: #dc2626; color: white;">🔄 Force Refresh</button>
             </div>
           </td>
         </tr>
@@ -1642,6 +1931,7 @@ export default async function mount(el, props = {}) {
           <div style="display: flex; align-items: center; gap: 0.5rem;">
             <div style="width: 8px; height: 8px; border-radius: 50%; background: ${typeColor};"></div>
             ${column.id}
+            ${column.manual ? '<span style="background: #10b981; color: white; font-size: 0.7rem; padding: 2px 4px; border-radius: 4px; margin-left: 0.5rem;">MANUAL</span>' : ''}
           </div>
         </td>
         <td style="padding: 0.75rem; border-right: 1px solid var(--c-border);">
@@ -1707,6 +1997,7 @@ export default async function mount(el, props = {}) {
       columnsTableBody.appendChild(row);
     });
     
+    console.log(`✅ TABLA GENERADA: ${filteredColumns.length} filas agregadas al DOM`);
     updateColumnStats();
   }
 
@@ -1750,6 +2041,101 @@ export default async function mount(el, props = {}) {
     }, 2000);
   };
 
+  // NUEVA: Función para sincronizar y refrescar la tabla
+  window.syncAndRefreshTable = function() {
+    console.log("🔄 Sincronización manual iniciada...");
+    
+    // BUSCAR COLUMNAS EN TODOS LOS LUGARES POSIBLES
+    const columnsByPageData = columnsByPage.get(activePage) || [];
+    const detectedColumnsData = detectedColumns.filter(col => col.page === activePage);
+    const allColumnsByPage = Array.from(columnsByPage.entries());
+    
+    console.log(`🔍 DEBUGGING COMPLETO:`, {
+      activePage,
+      columnsByPageForThisPage: columnsByPageData.length,
+      columnsByPageData,
+      detectedColumnsForThisPage: detectedColumnsData.length,
+      detectedColumnsData,
+      allColumnsByPageEntries: allColumnsByPage,
+      totalDetectedColumns: detectedColumns.length
+    });
+    
+    // Si columnsByPage está vacío pero detectedColumns tiene datos, usar detectedColumns
+    let sourceColumns = columnsByPageData;
+    if (columnsByPageData.length === 0 && detectedColumnsData.length > 0) {
+      console.log("📋 columnsByPage está vacío, usando detectedColumns como fuente");
+      sourceColumns = detectedColumnsData.map(col => ({
+        id: col.id,
+        x: col.x,
+        y: col.y,
+        w: col.width,
+        h: col.height,
+        type: col.type,
+        confidence: col.confidence,
+        note: col.notes,
+        manual: col.manual || false
+      }));
+      
+      // Guardar en columnsByPage para consistencia
+      columnsByPage.set(activePage, sourceColumns);
+    }
+    
+    console.log(`✅ Usando ${sourceColumns.length} columnas de fuente final`);
+    
+    // Refrescar la tabla
+    generateColumnsTable();
+    updateColumnsCount();
+    
+    status(`🔄 Tabla sincronizada: ${sourceColumns.length} columnas`);
+  };
+
+  // Función de fuerza bruta para refrescar tabla
+  window.forceTableRefresh = function() {
+    console.log("💥 FUERZA BRUTA: Refrescando tabla...");
+    
+    // Buscar en TODAS las páginas
+    let foundColumns = [];
+    for (let [pageNum, columns] of columnsByPage.entries()) {
+      if (columns && columns.length > 0) {
+        console.log(`📄 Página ${pageNum}: ${columns.length} columnas`);
+        if (pageNum === activePage) {
+          foundColumns = columns;
+        }
+      }
+    }
+    
+    // Si no encontramos en columnsByPage, buscar en detectedColumns
+    if (foundColumns.length === 0) {
+      foundColumns = detectedColumns.filter(col => col.page === activePage);
+      console.log(`📋 Encontradas ${foundColumns.length} en detectedColumns`);
+    }
+    
+    console.log(`💪 FORZANDO con ${foundColumns.length} columnas`);
+    
+    if (foundColumns.length > 0) {
+      // Limpiar y regenerar
+      filteredColumns = foundColumns.map((col, index) => ({
+        id: col.id || `C-${index + 1}`,
+        type: col.type || 'structural',
+        description: `Column ${col.id || `C-${index + 1}`}`,
+        width: col.w || col.width || 12,
+        height: col.h || col.height || 240,
+        x: Math.round(col.x),
+        y: Math.round(col.y),
+        confidence: Math.round((col.confidence || 0.85) * 100),
+        material: col.material || '',
+        unit: col.unit || 'count',
+        manual: col.manual || false
+      }));
+      
+      // Regenerar tabla directamente
+      generateColumnsTable();
+      status(`💥 FORZADO: ${foundColumns.length} columnas cargadas`);
+    } else {
+      status("❌ No se encontraron columnas en ningún sistema");
+    }
+  };
+
   // Función de detección vectorial específica para el modal
   async function detectColumnsVectorial() {
     if (!pdfDoc) {
@@ -1772,11 +2158,16 @@ export default async function mount(el, props = {}) {
 
   // Función para actualizar estadísticas
   function updateColumnStats() {
-    const columns = detectedColumns.filter(col => col.page === activePage);
+    // LEER DIRECTAMENTE DE LA MISMA FUENTE QUE EL PANEL IZQUIERDO
+    const columns = columnsByPage.get(activePage) || [];
+    const tableColumns = columns.map((col) => ({
+      type: col.type || 'structural'
+    }));
+    
     const selected = selectedColumns.size;
-    const total = columns.length;
-    const structural = columns.filter(col => col.type === 'structural').length;
-    const decorative = columns.filter(col => col.type === 'decorative').length;
+    const total = tableColumns.length;
+    const structural = tableColumns.filter(col => col.type === 'structural').length;
+    const decorative = tableColumns.filter(col => col.type === 'decorative').length;
     
     $("[data-role='selected-count']").textContent = selected;
     $("[data-role='total-count']").textContent = total;
@@ -1787,7 +2178,9 @@ export default async function mount(el, props = {}) {
 
   // Función para actualizar conteo de columnas
   function updateColumnsCount() {
-    const columns = detectedColumns.filter(col => col.page === activePage);
+    // LEER DIRECTAMENTE DE LA MISMA FUENTE QUE EL PANEL IZQUIERDO
+    const columns = columnsByPage.get(activePage) || [];
+    console.log(`📊 Actualizando contador desde columnsByPage: ${columns.length} columnas en página ${activePage}`);
     $("[data-role='columns-count']").textContent = `Total: ${columns.length}`;
   }
 
@@ -1932,80 +2325,14 @@ export default async function mount(el, props = {}) {
   // Event listener para abrir modal de tabla de columnas
   const openColumnsTableBtn = $("[data-role='open-columns-table']");
   openColumnsTableBtn.addEventListener('click', () => {
-    // Si no hay columnas, agregar algunas de demostración
-    if (detectedColumns.filter(col => col.page === activePage).length === 0) {
-      // Agregar columnas de ejemplo para demostración
-      const demoColumns = [
-        {
-          id: 'DEMO_COL_001',
-          x: 150,
-          y: 200,
-          width: 45,
-          height: 120,
-          page: activePage,
-          type: 'structural',
-          confidence: 0.92,
-          description: 'Main support column',
-          material: 'Concrete',
-          unit: 'count',
-          notes: 'Load-bearing structural element'
-        },
-        {
-          id: 'DEMO_COL_002', 
-          x: 300,
-          y: 180,
-          width: 50,
-          height: 140,
-          page: activePage,
-          type: 'decorative',
-          confidence: 0.87,
-          description: 'Decorative pillar',
-          material: 'Stone',
-          unit: 'count',
-          notes: 'Aesthetic element with carved details'
-        },
-        {
-          id: 'DEMO_COL_003',
-          x: 450,
-          y: 210,
-          width: 40,
-          height: 110,
-          page: activePage,
-          type: 'support',
-          confidence: 0.95,
-          description: 'Secondary support',
-          material: 'Steel',
-          unit: 'count', 
-          notes: 'Reinforcement column'
-        }
-      ];
-      
-      // Agregar a detectedColumns
-      detectedColumns.push(...demoColumns);
-      
-      // Sincronizar con columnsByPage
-      const currentCols = columnsByPage.get(activePage) || [];
-      demoColumns.forEach(col => {
-        currentCols.push({
-          id: col.id,
-          x: col.x,
-          y: col.y,
-          w: col.width,
-          h: col.height,
-          type: col.type,
-          confidence: col.confidence,
-          description: col.description,
-          material: col.material,
-          unit: col.unit,
-          notes: col.notes,
-          color: col.type === 'structural' ? '#3b82f6' : 
-                 col.type === 'decorative' ? '#8b5cf6' : '#10b981'
-        });
-      });
-      columnsByPage.set(activePage, currentCols);
-      
-      status("📊 Demo columns loaded for preview");
-    }
+    // LEER DIRECTAMENTE SIN SINCRONIZACIÓN COMPLEJA
+    const columns = columnsByPage.get(activePage) || [];
+    
+    console.log(`🔍 Modal abierto - Leyendo directamente de columnsByPage:`, {
+      activePage,
+      columnsCount: columns.length,
+      columns: columns.map(c => ({ id: c.id, type: c.type, x: c.x, y: c.y }))
+    });
     
     openColumnsTableModal();
   });
@@ -2055,6 +2382,11 @@ export default async function mount(el, props = {}) {
     renderCountsPanels();
     renderAnnotations(activePage);
     status(`New column ${newColumn.id} added`);
+  });
+
+  // Event listener para botón de sincronización
+  syncColumnsBtn.addEventListener('click', () => {
+    window.syncAndRefreshTable();
   });
 
   exportColumnsBtn.addEventListener('click', () => {
@@ -2275,7 +2607,16 @@ export default async function mount(el, props = {}) {
   });
   btnDetectROI.addEventListener("click", async () => {
     if (!pdfDoc) return;
-    await detectSquaresOn(activePage, { useROI: true });
+    
+    // Verificar si hay ROI definido
+    const roi = roiByPage.get(activePage);
+    if (!roi) {
+      status("⚠️ Primero arrastra para seleccionar un área en el plano");
+      return;
+    }
+    
+    status(`🎯 Detectando columnas en área seleccionada (${Math.round(roi.w)}×${Math.round(roi.h)} px)`);
+    await detectSquaresOn(activePage);
   });
   btnDatasetConfig.addEventListener("click", () => {
     showDatasetModal();
@@ -2556,9 +2897,12 @@ export default async function mount(el, props = {}) {
 
     if (showGrid) drawGrid(n);
 
-    const cols = columnsByPage.get(pageNum) || [];
-    drawRects(n.octx, cols, { fill: "rgba(99,102,241,.22)", stroke: "rgba(99,102,241,.95)" });
-    drawColumnLabels(n.octx, cols);
+    // Solo dibujar columnas si ya se ejecutó detección
+    if (hasDetectionRun) {
+      const cols = columnsByPage.get(pageNum) || [];
+      drawRects(n.octx, cols, { fill: "rgba(99,102,241,.22)", stroke: "rgba(99,102,241,.95)" });
+      drawColumnLabels(n.octx, cols);
+    }
 
     renderAnnotations(pageNum);
     drawROIOverlay(pageNum);
@@ -2708,10 +3052,13 @@ export default async function mount(el, props = {}) {
     });
   }
 
-  // Zoom con rueda (natural)
+  // Zoom con rueda (natural) - respeta bloqueo de zoom
   viewerWrap.addEventListener(
     "wheel",
     (e) => {
+      // Si el zoom está bloqueado, no permitir zoom
+      if (zoomLocked) return;
+      
       const allowZoom = ["hand", "select", "roi"].includes(currentTool) || e.ctrlKey;
       if (!allowZoom) return;
       e.preventDefault();
@@ -2761,17 +3108,86 @@ export default async function mount(el, props = {}) {
   /* =========================
      ZOOM / FITS
   ========================= */
-  btnZoomIn.addEventListener("click", () => { fitMode = FIT.MANUAL; applyScale(RENDER_SCALE + 0.15, { keepCenter: true }); });
-  btnZoomOut.addEventListener("click", () => { fitMode = FIT.MANUAL; applyScale(RENDER_SCALE - 0.15, { keepCenter: true }); });
+  btnZoomIn.addEventListener("click", () => { 
+    if (zoomLocked) return;
+    fitMode = FIT.MANUAL; 
+    applyScale(RENDER_SCALE + 0.15, { keepCenter: true }); 
+  });
+  btnZoomOut.addEventListener("click", () => { 
+    if (zoomLocked) return;
+    fitMode = FIT.MANUAL; 
+    applyScale(RENDER_SCALE - 0.15, { keepCenter: true }); 
+  });
   zoomSlider.addEventListener("input", (e) => {
+    if (zoomLocked) {
+      e.target.value = Math.round(RENDER_SCALE * 100);
+      return;
+    }
     fitMode = FIT.MANUAL;
     const pct = clamp(+e.target.value || 100, 50, 300);
     applyScale((pct / 100) * BASE_RENDER_SCALE, { keepCenter: true });
   });
-  btnFitWidth.addEventListener("click", () => { fitMode = FIT.WIDTH; applyFit(); });
-  btnFitPage.addEventListener("click", () => { fitMode = FIT.PAGE; applyFit(); });
+  btnFitWidth.addEventListener("click", () => { 
+    if (zoomLocked) return;
+    fitMode = FIT.WIDTH; 
+    applyFit(); 
+  });
+  btnFitPage.addEventListener("click", () => { 
+    if (zoomLocked) return;
+    fitMode = FIT.PAGE; 
+    applyFit(); 
+  });
   btnCenter.addEventListener("click", () => centerPageInView(true));
-  btnResetZoom.addEventListener("click", () => { fitMode = FIT.MANUAL; applyScale(BASE_RENDER_SCALE); });
+  btnResetZoom.addEventListener("click", () => { 
+    if (zoomLocked) return;
+    fitMode = FIT.MANUAL; 
+    applyScale(BASE_RENDER_SCALE); 
+  });
+  
+  // NUEVO: Event listeners para botones de bloqueo de zoom y conteo manual
+  btnLockZoom.addEventListener("click", () => {
+    zoomLocked = !zoomLocked;
+    btnLockZoom.textContent = zoomLocked ? "🔒" : "🔓";
+    btnLockZoom.classList.toggle("locked", zoomLocked);
+    status(zoomLocked ? "🔒 Zoom bloqueado" : "🔓 Zoom desbloqueado");
+  });
+  
+  btnManualCount.addEventListener("click", () => {
+    manualCountMode = !manualCountMode;
+    btnManualCount.classList.toggle("active-manual", manualCountMode);
+    
+    if (manualCountMode) {
+      currentTool = "manual-count";
+      viewer.classList.add("cursor-manual-count");
+      status("👆 Modo conteo manual activo - Haz clic en las columnas");
+    } else {
+      currentTool = "hand";
+      viewer.classList.remove("cursor-manual-count");
+      status("Modo conteo manual desactivado");
+    }
+    updateToolSelection();
+  });
+  
+  // NUEVO: Modo eliminación manual
+  btnDeleteMode.addEventListener("click", () => {
+    deleteMode = !deleteMode;
+    manualCountMode = false; // Desactivar modo manual si está activo
+    btnDeleteMode.classList.toggle("active-delete", deleteMode);
+    btnManualCount.classList.remove("active-manual");
+    
+    if (deleteMode) {
+      currentTool = "delete-mode";
+      viewer.classList.add("cursor-delete");
+      viewer.classList.remove("cursor-manual-count");
+      status("🗑️ Modo eliminación activo - Haz clic en columnas para eliminarlas");
+    } else {
+      currentTool = "hand";
+      viewer.classList.remove("cursor-delete");
+      status("Modo eliminación desactivado");
+    }
+    updateToolSelection();
+  });
+  
   let windowResizeTimeout;
   window.addEventListener("resize", () => {
     if (!pdfDoc || !autoFitOnResize || fitMode === FIT.MANUAL) return;
@@ -2799,8 +3215,11 @@ export default async function mount(el, props = {}) {
      DETECCIÓN — CUADRADOS
      Vector-only con pdf.js (100%).
   ========================= */
-  async function detectSquaresOn(pageNum, { useROI = false } = {}) {
+  async function detectSquaresOn(pageNum) {
     if (!pdfDoc) return [];
+    
+    // Activar bandera de detección ejecutada
+    hasDetectionRun = true;
     
     showProgressModal("Detectando Columnas");
     
@@ -2812,19 +3231,17 @@ export default async function mount(el, props = {}) {
       const node = pageNodes.get(pageNum);
       if (!node) return [];
       
-      let results = [];
-      
-      // Seleccionar método según configuración
-      switch (detectionConfig.model) {
-        case 'yolo8':
-          results = await detectWithYOLOMethod(page, node, pageNum, useROI);
-          break;
-        case 'hybrid':
-          results = await detectWithHybridMethod(page, node, pageNum, useROI);
-          break;
-        default: // vectorial
-          results = await detectWithVectorialMethod(page, node, pageNum, useROI);
-          break;
+      // Usar directamente el algoritmo vectorial optimizado
+      updateProgress(15, "Ejecutando algoritmo vectorial...");
+      let results = await detectWithVectorialMethod(page, node, pageNum);
+      // Si hay ROI definido, filtrar resultados para que solo estén dentro del área seleccionada
+      const roi = roiByPage.get(pageNum);
+      if (roi) {
+        results = results.filter(r =>
+          r.x >= roi.x && r.y >= roi.y &&
+          (r.x + r.w) <= (roi.x + roi.w) &&
+          (r.y + r.h) <= (roi.y + roi.h)
+        );
       }
       
       updateProgress(95, "Guardando resultados...");
@@ -2832,7 +3249,7 @@ export default async function mount(el, props = {}) {
 
       // Procesar y guardar resultados
       const finalColumns = results.map((rect, i) => ({
-        id: uid(),
+        id: `C-${i + 1}`, // Cambiar a C-1, C-2, etc.
         x: rect.x, y: rect.y, w: rect.w, h: rect.h,
         type: rect.type || "structural",
         note: rect.note || `C-${i + 1}`,
@@ -2842,6 +3259,39 @@ export default async function mount(el, props = {}) {
       }));
 
       columnsByPage.set(pageNum, finalColumns);
+      
+      // CORREGIDO: Sincronizar inmediatamente con detectedColumns
+      // Limpiar columnas existentes de esta página
+      for (let i = detectedColumns.length - 1; i >= 0; i--) {
+        if (detectedColumns[i].page === pageNum) {
+          detectedColumns.splice(i, 1);
+        }
+      }
+      
+      // Agregar las nuevas columnas detectadas con el formato correcto
+      finalColumns.forEach((col) => {
+        detectedColumns.push({
+          id: col.id,
+          page: pageNum,
+          type: col.type,
+          x: col.x,
+          y: col.y,
+          width: col.w,
+          height: col.h,
+          confidence: col.confidence,
+          description: `Column ${col.id}`,
+          material: '',
+          unit: 'count',
+          notes: col.note,
+          manual: false
+        });
+      });
+      
+      console.log(`✅ Detección completada: ${finalColumns.length} columnas agregadas a ambos sistemas`, {
+        columnsByPage: finalColumns.length,
+        detectedColumns: detectedColumns.filter(c => c.page === pageNum).length
+      });
+      
       scheduleAutoSave();
       
       // Renderizar
@@ -2861,7 +3311,22 @@ export default async function mount(el, props = {}) {
       updateProgress(100, `¡${finalColumns.length} columnas detectadas!`);
       await sleep(500);
 
-      status(`✅ ${finalColumns.length} columnas (${detectionConfig.model}) - ${Math.round(detectionConfig.confidence * 100)}%`);
+      // Mensaje mejorado para el algoritmo optimizado
+      if (detectionConfig.model === 'vectorial') {
+        status(`🧠 ${finalColumns.length} columnas detectadas con "Cuadradito con Cerebro" - ${Math.round(detectionConfig.confidence * 100)}% precisión`);
+      } else {
+        status(`✅ ${finalColumns.length} columnas (${detectionConfig.model}) - ${Math.round(detectionConfig.confidence * 100)}%`);
+      }
+      
+      // Debug final: verificar estado de ambos sistemas
+      console.log(`🎯 Detección finalizada:`, {
+        pageNum,
+        finalColumns: finalColumns.length,
+        columnsByPageCount: (columnsByPage.get(pageNum) || []).length,
+        detectedColumnsCount: detectedColumns.filter(c => c.page === pageNum).length,
+        allDetectedColumns: detectedColumns.length
+      });
+      
       return finalColumns;
       
     } catch (error) {
@@ -2873,20 +3338,149 @@ export default async function mount(el, props = {}) {
     }
   }
   
-  // Método vectorial optimizado
-  async function detectWithVectorialMethod(page, node, pageNum, useROI) {
+  // Método vectorial optimizado - Algoritmo "cuadradito con cerebro" simplificado
+  async function detectWithVectorialMethod(page, node, pageNum) {
     updateProgress(15, "Analizando estructura vectorial...");
     await sleep(100);
     
-    // [Código vectorial existente simplificado]
     const OPS = pdfjsLib.OPS;
     const vp = node.viewport;
     const opList = await page.getOperatorList();
     
-    // ... [resto del código vectorial pero optimizado]
+    // Funciones utilitarias (igual que en index.html)
+    function mul(a, b) {
+      return [
+        a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1],
+        a[0] * b[2] + a[2] * b[3], a[1] * b[2] + a[3] * b[3],
+        a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5]
+      ];
+    }
+    function apply(m, x, y) { return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]; }
+    function aabb(pts) {
+      let xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+      const minx = Math.min(...xs), maxx = Math.max(...xs);
+      const miny = Math.min(...ys), maxy = Math.max(...ys);
+      return { x: minx, y: miny, w: maxx - minx, h: maxy - miny, cx: (minx + maxx) / 2, cy: (miny + maxy) / 2, area: (maxx - minx) * (maxy - miny) };
+    }
+    function angle(a, b, c) {
+      const v1 = [a[0] - b[0], a[1] - b[1]], v2 = [c[0] - b[0], c[1] - b[1]];
+      const d = (v1[0] * v2[0] + v1[1] * v2[1]) / (Math.hypot(...v1) * Math.hypot(...v2));
+      return Math.acos(Math.max(-1, Math.min(1, d))) * 180 / Math.PI;
+    }
+    function iou(A, B) {
+      const x1 = Math.max(A.x, B.x), y1 = Math.max(A.y, B.y);
+      const x2 = Math.min(A.x + A.w, B.x + B.w), y2 = Math.min(A.y + A.h, B.y + B.h);
+      const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+      const U = A.w * A.h + B.w * B.h - inter; return U > 0 ? inter / U : 0;
+    }
     
-    updateProgress(80, "Procesando vectores...");
-    return []; // Placeholder
+    updateProgress(25, "Extrayendo vectores...");
+    
+    // Estado gráfico + buffers
+    let ctm = [1, 0, 0, 1, 0, 0], stack = [];
+    const quads = [];
+    
+    const pushQuad = (pts) => {
+      const M = mul(vp.transform, ctm);
+      const P = pts.map(p => apply(M, p[0], p[1]));
+      quads.push(aabb(P));
+    };
+    
+    for (let i = 0; i < opList.fnArray.length; i++) {
+      const fn = opList.fnArray[i], args = opList.argsArray[i];
+      if (fn === OPS.save) stack.push(ctm.slice());
+      else if (fn === OPS.restore) ctm = stack.pop() || [1, 0, 0, 1, 0, 0];
+      else if (fn === OPS.transform) ctm = mul(ctm, args);
+      else if (fn === OPS.rectangle) {
+        for (let j = 0; j < args.length; j += 4) {
+          const x = args[j], y = args[j + 1], w = args[j + 2], h = args[j + 3];
+          pushQuad([[x, y], [x + w, y], [x + w, y + h], [x, y + h]]);
+        }
+      }
+      else if (fn === OPS.constructPath) {
+        const pathOps = args[0], coords = args[1];
+        let ci = 0, curr = [], polys = []; let last = null;
+        const flush = () => { if (curr.length >= 3) polys.push(curr), curr = []; };
+        for (const op of pathOps) {
+          if (op === OPS.moveTo) { const x = coords[ci++], y = coords[ci++]; flush(); curr = [[x, y]]; last = [x, y]; }
+          else if (op === OPS.lineTo) { const x = coords[ci++], y = coords[ci++]; curr.push([x, y]); last = [x, y]; }
+          else if (op === OPS.closePath) { flush(); last = null; }
+          else if (op === OPS.rectangle) {
+            const x = coords[ci++], y = coords[ci++], w = coords[ci++], h = coords[ci++];
+            polys.push([[x, y], [x + w, y], [x + w, y + h], [x, y + h]]);
+          } else {
+            if (op === OPS.curveTo) ci += 6;
+            else if (op === OPS.curveTo2) ci += 4;
+            else if (op === OPS.curveTo3) ci += 4;
+            last = null;
+          }
+        }
+        
+        const angTol = detectionConfig.angularTolerance || 12;
+        const minSide = detectionConfig.minSideLength || 12;
+        for (const poly of polys) {
+          if (poly.length !== 4) continue;
+          const P = poly.slice();
+          if (P[0][0] !== P.at(-1)[0] || P[0][1] !== P.at(-1)[1]) P.push(P[0]);
+          const A = angle(P[3], P[0], P[1]), B = angle(P[0], P[1], P[2]),
+                C = angle(P[1], P[2], P[3]), D = angle(P[2], P[3], P[0]);
+          const good = [A, B, C, D].every(a => Math.abs(90 - a) <= angTol);
+          if (!good) continue;
+          const w = Math.hypot(P[1][0] - P[0][0], P[1][1] - P[0][1]);
+          const h = Math.hypot(P[2][0] - P[1][0], P[2][1] - P[1][1]);
+          if (Math.min(w, h) < minSide) continue;
+          pushQuad(poly);
+        }
+      }
+    }
+    
+    updateProgress(45, "Aplicando filtros...");
+    console.log(`Raw quads detectados: ${quads.length}`);
+    
+    // Aplicar cortes
+    const cutX = node.canvas.width * (1 - ((detectionConfig.rightCutPercent || 12) / 100));
+    const topCutY = node.canvas.height * ((detectionConfig.topCutPercent || 6) / 100);
+    let boxes = quads.filter(b => b.cx < cutX && b.y > topCutY);
+    console.log(`Después de cortes: ${boxes.length}`);
+    
+    // Merge overlaps
+    const merged = [];
+    for (const r of boxes.sort((a, b) => (a.x - b.x) || (a.y - b.y))) {
+      let put = true;
+      for (let i = 0; i < merged.length; i++) {
+        if (iou(merged[i], r) > 0.45) {
+          if (merged[i].area < r.area) merged[i] = r;
+          put = false; break;
+        }
+      }
+      if (put) merged.push(r);
+    }
+    console.log(`Después de merge: ${merged.length}`);
+    
+    updateProgress(60, "Filtrando cuadrados...");
+    
+    // Filtrar cuadrados
+    const squareMin = detectionConfig.squareRatioMin || 0.70;
+    const isSquare = r => (Math.min(r.w, r.h) / Math.max(r.w, r.h)) >= squareMin;
+    const squares = merged.filter(isSquare);
+    console.log(`Cuadrados encontrados: ${squares.length}`);
+    
+    updateProgress(80, "Aplicando lógica de columnas...");
+    
+    // Por ahora, considerar todos los cuadrados como columnas potenciales
+    // (simplificado sin análisis de texto complejo)
+    const results = squares.map((r, i) => ({
+      x: r.x, y: r.y, w: r.w, h: r.h,
+      type: "structural",
+      confidence: 0.9,
+      note: `C-${i + 1}`
+    }));
+    
+    console.log(`Columnas detectadas: ${results.length}`);
+    updateProgress(95, "Finalizando...");
+    await sleep(100);
+    
+    return results;
   }
   
   // Método YOLO v8
@@ -3223,6 +3817,95 @@ export default async function mount(el, props = {}) {
       drawing = true;
       lastPt = pos;
 
+      if (currentTool === "manual-count") {
+        // Modo conteo manual: crear nueva columna en la posición del clic
+        const cols = columnsByPage.get(pageNum) || [];
+        const newColumn = {
+          id: `C-${cols.length + 1}`, // Usar el mismo formato C-1, C-2, etc.
+          x: pos.x - 15, // Centrar en el punto del clic
+          y: pos.y - 15,
+          w: 30,
+          h: 30,
+          type: "manual",
+          note: `C-${cols.length + 1}`, // Etiqueta corta
+          color: "#10b981", // Verde para identificar como manual
+          highlight: false,
+          confidence: 1.0,
+          manual: true // Marcar como conteo manual
+        };
+        
+        cols.push(newColumn);
+        columnsByPage.set(pageNum, cols);
+        
+        // Renderizar y actualizar
+        const node = pageNodes.get(pageNum);
+        if (node) {
+          node.octx.clearRect(0, 0, node.overlay.width, node.overlay.height);
+          drawRects(node.octx, cols, { fill: "rgba(99,102,241,.22)", stroke: "rgba(99,102,241,.95)" });
+          drawColumnLabels(node.octx, cols);
+        }
+        
+        renderCountsPanels();
+        renderColumnEditor();
+        scheduleAutoSave();
+        status(`✅ Columna manual ${newColumn.id} agregada`);
+        
+        // Auto-desactivar el modo después de usar (opcional)
+        // setTimeout(() => {
+        //   resetSpecialModes();
+        //   status("Modo conteo manual sigue activo");
+        // }, 1000);
+        return;
+      }
+      
+      if (currentTool === "delete-mode") {
+        // Modo eliminación: buscar columna en la posición del clic y eliminarla
+        const cols = columnsByPage.get(pageNum) || [];
+        const tolerance = 25; // Tolerancia para el clic
+        
+        // Buscar columna clickeada
+        const clickedIndex = cols.findIndex(col => {
+          return pos.x >= col.x - tolerance && pos.x <= col.x + col.w + tolerance &&
+                 pos.y >= col.y - tolerance && pos.y <= col.y + col.h + tolerance;
+        });
+        
+        if (clickedIndex !== -1) {
+          const deletedColumn = cols[clickedIndex];
+          cols.splice(clickedIndex, 1);
+          columnsByPage.set(pageNum, cols);
+          
+          // Re-numerar las columnas restantes
+          cols.forEach((col, index) => {
+            if (!col.manual) { // Solo re-numerar las automáticas
+              col.id = `C-${index + 1}`;
+              col.note = `C-${index + 1}`;
+            }
+          });
+          
+          // Renderizar y actualizar
+          const node = pageNodes.get(pageNum);
+          if (node) {
+            node.octx.clearRect(0, 0, node.overlay.width, node.overlay.height);
+            drawRects(node.octx, cols, { fill: "rgba(99,102,241,.22)", stroke: "rgba(99,102,241,.95)" });
+            drawColumnLabels(node.octx, cols);
+          }
+          
+          renderCountsPanels();
+          renderColumnEditor();
+          scheduleAutoSave();
+          status(`🗑️ Columna ${deletedColumn.id} eliminada`);
+          
+          // Auto-desactivar el modo después de usar (opcional)
+          // setTimeout(() => {
+          //   resetSpecialModes();
+          //   status("Modo eliminación sigue activo");
+          // }, 1000);
+        } else {
+          status("⚠️ No hay columna en esa posición");
+        }
+        return;
+      }
+
       if (currentTool === "pen") {
         temp = { type: "pen", points: [pos], color: strokeColor, width: strokeWidth };
       } else if (currentTool === "rect") {
@@ -3286,12 +3969,11 @@ export default async function mount(el, props = {}) {
       if (fin._roi) {
         const x = Math.min(fin.x, fin.x + fin.w), y = Math.min(fin.y, fin.y + fin.h);
         const w = Math.abs(fin.w), h = Math.abs(fin.h);
-        if (w >= 4 && h >= 4) {
-          roiByPage.set(pageNum, { x, y, w, h });
-          renderOverlay(pageNum);
-          updateThumbROI(pageNum);
-          status("ROI definida 🟩");
-        } else { status("ROI ignorada (muy pequeña)"); }
+        // Guardar cualquier ROI, sin importar el tamaño
+        roiByPage.set(pageNum, { x, y, w, h });
+        renderOverlay(pageNum);
+        updateThumbROI(pageNum);
+        status("ROI definida 🟩");
         return;
       }
 
@@ -3323,9 +4005,12 @@ export default async function mount(el, props = {}) {
     const { octx } = node;
     octx.clearRect(0, 0, node.overlay.width, node.overlay.height);
 
-    const cols = columnsByPage.get(pageNum) || [];
-    drawRects(octx, cols, { fill: "rgba(99,102,241,.22)", stroke: "rgba(99,102,241,.95)" });
-    drawColumnLabels(octx, cols);
+    // Solo dibujar columnas si ya se ejecutó detección
+    if (hasDetectionRun) {
+      const cols = columnsByPage.get(pageNum) || [];
+      drawRects(octx, cols, { fill: "rgba(99,102,241,.22)", stroke: "rgba(99,102,241,.95)" });
+      drawColumnLabels(octx, cols);
+    }
 
     const roi = tempROI?._roi
       ? { x: Math.min(tempROI.x, tempROI.x + tempROI.w), y: Math.min(tempROI.y, tempROI.y + tempROI.h), w: Math.abs(tempROI.w), h: Math.abs(tempROI.h) }
@@ -3344,31 +4029,52 @@ export default async function mount(el, props = {}) {
   function drawRects(ctx, rects, { fill = "rgba(99,102,241,.22)", stroke = "rgba(99,102,241,.95)" } = {}) {
     if (!rects || !rects.length) return;
     ctx.save();
-    ctx.strokeStyle = stroke; ctx.fillStyle = fill; ctx.lineWidth = 2;
-    for (const r of rects) { ctx.beginPath(); ctx.rect(r.x + 0.5, r.y + 0.5, r.w, r.h); ctx.fill(); ctx.stroke(); }
+    ctx.lineWidth = 2;
+    for (const r of rects) { 
+      // Usar colores diferentes para columnas manuales
+      if (r.manual) {
+        ctx.strokeStyle = "rgba(16,185,129,.95)"; // Verde para manuales
+        ctx.fillStyle = "rgba(16,185,129,.22)";
+      } else {
+        ctx.strokeStyle = stroke;
+        ctx.fillStyle = fill;
+      }
+      ctx.beginPath(); 
+      ctx.rect(r.x + 0.5, r.y + 0.5, r.w, r.h); 
+      ctx.fill(); 
+      ctx.stroke(); 
+    }
     ctx.restore();
   }
 
   function drawColumnLabels(ctx, rects) {
     if (!rects || !rects.length) return;
     ctx.save();
-    ctx.font = "bold 12px ui-sans-serif";
+    ctx.font = "bold 11px ui-sans-serif"; // Tamaño fijo pequeño
     ctx.textBaseline = "top";
     for (const r of rects) {
       const label = String(r.id || "");
       if (!label) continue;
-      const pad = 4;
-      const extra = r.type ? ` · ${r.type}` : "";
-      const txt = label + extra;
+      const pad = 3; // Padding fijo pequeño
+      const txt = label;
       const tw = ctx.measureText(txt).width;
-      ctx.fillStyle = "rgba(15,23,42,.9)";
-      ctx.strokeStyle = "rgba(100,116,139,.6)";
+      
+      // Color de fondo diferente para columnas manuales
+      if (r.manual) {
+        ctx.fillStyle = "rgba(16,185,129,.95)"; // Verde para manuales
+        ctx.strokeStyle = "rgba(6,95,70,.9)";
+      } else {
+        ctx.fillStyle = "rgba(15,23,42,.95)";
+        ctx.strokeStyle = "rgba(100,116,139,.7)";
+      }
+      
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.rect(r.x + 6, r.y + 6, tw + pad * 2, 18);
+      // Rectángulo pequeño y fijo
+      ctx.rect(r.x + 4, r.y + 4, tw + pad * 2, 16);
       ctx.fill(); ctx.stroke();
-      ctx.fillStyle = "#e5e7eb";
-      ctx.fillText(txt, r.x + 6 + pad, r.y + 6 + 3);
+      ctx.fillStyle = "#ffffff"; // Texto blanco para mejor contraste
+      ctx.fillText(txt, r.x + 4 + pad, r.y + 4 + 2);
     }
     ctx.restore();
   }
@@ -3468,8 +4174,31 @@ export default async function mount(el, props = {}) {
   });
 
   btnExportPDF.addEventListener("click", async () => {
-    if (!pdfDoc || !jsPDFReady) { status("jsPDF no disponible"); return; }
+    if (!pdfDoc) { 
+      status("❌ No hay PDF cargado para exportar"); 
+      return; 
+    }
+    
+    if (!jsPDFReady) { 
+      status("⚠️ jsPDF no está disponible - Reintentando carga..."); 
+      try {
+        await ensureScript(JSPDF_URL);
+        jsPDFReady = !!window.jspdf;
+        if (!jsPDFReady) {
+          status("❌ No se pudo cargar jsPDF");
+          return;
+        }
+        status("✅ jsPDF cargado correctamente");
+      } catch (error) {
+        console.error("Error cargando jsPDF:", error);
+        status("❌ Error al cargar jsPDF");
+        return;
+      }
+    }
+    
     try {
+      status("📄 Exportando PDF con columnas detectadas...");
+      
       const { jsPDF } = window.jspdf;
       let doc;
       const pagesToExport = selectedPages.size ? [...selectedPages] : Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1);
@@ -3478,10 +4207,12 @@ export default async function mount(el, props = {}) {
         const p = pagesToExport[i];
         const canvas = await mergePageToCanvas(p);
         const imgData = canvas.toDataURL("image/jpeg", 0.92);
+        
         // Tamaño: ajustamos a puntos A4 según orientación de la página renderizada
         const isLandscape = canvas.width > canvas.height;
         const pageW = isLandscape ? 297 : 210; // mm
         const pageH = isLandscape ? 210 : 297; // mm
+        
         if (!doc) doc = new jsPDF({ orientation: isLandscape ? "landscape" : "portrait", unit: "mm", format: "a4" });
         else doc.addPage(undefined, isLandscape ? "landscape" : "portrait");
 
@@ -3491,14 +4222,20 @@ export default async function mount(el, props = {}) {
         const w = canvas.width * ratio, h = canvas.height * ratio;
         const x = (pageW - w) / 2, y = (pageH - h) / 2;
         doc.addImage(imgData, "JPEG", x, y, w, h);
+        
+        status(`📄 Procesando página ${i + 1}/${pagesToExport.length}...`);
       }
 
-      const name = (currentProject || "bp") + "-" + new Date().toISOString().slice(0, 10) + ".pdf";
+      // Nombre del archivo mejorado
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+      const totalColumns = Array.from(columnsByPage.values()).reduce((sum, cols) => sum + cols.length, 0);
+      const name = `${currentProject || "blueprint-analyzer"}-${totalColumns}cols-${timestamp}.pdf`;
+      
       doc.save(name);
-      status("PDF exportado ✅");
+      status(`✅ PDF exportado: ${name} (${pagesToExport.length} páginas, ${totalColumns} columnas)`);
     } catch (e) {
-      console.error(e);
-      status("Error al exportar PDF 😿");
+      console.error("Error en exportación PDF:", e);
+      status(`❌ Error al exportar PDF: ${e.message}`);
     }
   });
 
@@ -3563,9 +4300,15 @@ export default async function mount(el, props = {}) {
   });
 
   function renderColumnEditor() {
+    // No mostrar nada hasta que se ejecute detección
+    if (!hasDetectionRun) {
+      colEditorBox.innerHTML = `<div class="text-slate-400 text-sm px-1 py-2">Presiona "Detectar" para encontrar columnas.</div>`;
+      return;
+    }
+    
     const cols = columnsByPage.get(activePage) || [];
     if (!cols.length) {
-      colEditorBox.innerHTML = `<div class="text-slate-400 text-sm px-1 py-2">No hay columnas detectadas.</div>`;
+      colEditorBox.innerHTML = `<div class="text-slate-400 text-sm px-1 py-2">No hay columnas detectadas en esta página.</div>`;
       return;
     }
     colEditorBox.innerHTML = cols
@@ -3652,3 +4395,4 @@ export default async function mount(el, props = {}) {
     });
   }
 }
+

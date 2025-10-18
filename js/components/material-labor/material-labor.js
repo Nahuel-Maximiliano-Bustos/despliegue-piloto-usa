@@ -22,8 +22,45 @@ export default function mount(el, props = {}) {
     taxPct:      toNum(props.taxPct      ??  8), // %
   };
 
+  const normalizeMaterial = (m = {}) => ({
+    name: String(m.name || ""),
+    qty: toNum(m.qty ?? 0),
+    unit: toNum(m.unit ?? 0)
+  });
+  const normalizeLabor = (l = {}) => ({
+    role: String(l.role || ""),
+    hours: toNum(l.hours ?? 0),
+    rate: toNum(l.rate ?? 0)
+  });
+  function hydrateStateFrom(data){
+    if (!data || typeof data !== "object") return;
+    if ("currency" in data) state.currency = String(data.currency || state.currency || "USD");
+    if (Array.isArray(data.materials)) state.materials = data.materials.map(normalizeMaterial);
+    if (Array.isArray(data.labor)) state.labor = data.labor.map(normalizeLabor);
+    if ("contractors" in data) state.contractors = String(data.contractors ?? "");
+    if ("allocation" in data) state.allocation = String(data.allocation ?? "");
+    if ("overheadPct" in data) state.overheadPct = toNum(data.overheadPct);
+    if ("profitPct" in data) state.profitPct = toNum(data.profitPct);
+    if ("taxPct" in data) state.taxPct = toNum(data.taxPct);
+  }
   // Cargar de localStorage (sobrescribe props si hay datos previos)
-  try { Object.assign(state, JSON.parse(localStorage.getItem(LS_KEY) || "{}")); } catch {}
+  try { hydrateStateFrom(JSON.parse(localStorage.getItem(LS_KEY) || "{}")); } catch {}
+
+  const store = (window.AppStore && typeof window.AppStore.getMaterialLabor === "function") ? window.AppStore : null;
+  const STORE_READY = !!store;
+  let unsubscribeStore = null;
+  let unsubscribeBlueprint = null;
+  let blueprintSummary = (STORE_READY && typeof store.getBlueprintSummary === "function")
+    ? store.getBlueprintSummary()
+    : null;
+
+  if (STORE_READY) {
+    try {
+      hydrateStateFrom(store.getMaterialLabor());
+    } catch (error) {
+      console.warn("MaterialLabor store hydration failed", error);
+    }
+  }
 
   // --------- Estilos (dark pro) ---------
   injectOnce("ml-css", `
@@ -280,10 +317,16 @@ export default function mount(el, props = {}) {
   const onAsideToggle = () => applyShellMargin();
   document.addEventListener("ui:sidebar:toggle", onAsideToggle);
 
+  function syncFormFromState(){
+    r.overhead.value = String(state.overheadPct ?? 0);
+    r.profit.value   = String(state.profitPct ?? 0);
+    r.tax.value      = String(state.taxPct ?? 0);
+    r.contractors.value = state.contractors || "";
+    r.allocation.value  = state.allocation || "";
+  }
+
   // --------- listeners ---------
-  r.overhead.value = String(state.overheadPct);
-  r.profit.value   = String(state.profitPct);
-  r.tax.value      = String(state.taxPct);
+  syncFormFromState();
 
   [r.overhead,r.profit,r.tax].forEach(inp=>{
     inp.addEventListener("input", ()=>{
@@ -331,8 +374,6 @@ export default function mount(el, props = {}) {
   });
 
   // Notas
-  r.contractors.value = state.contractors;
-  r.allocation.value  = state.allocation;
   r.contractors.addEventListener("input", (e)=>{ state.contractors = e.target.value; save(); });
   r.allocation.addEventListener("input",  (e)=>{ state.allocation  = e.target.value;  save(); });
 
@@ -365,6 +406,44 @@ export default function mount(el, props = {}) {
     reader.readAsText(f);
   });
 
+  if (STORE_READY && typeof store.subscribe === "function") {
+    unsubscribeStore = store.subscribe("materialLabor:changed", (payload = {}) => {
+      const next = payload?.materialLabor || (store.getMaterialLabor ? store.getMaterialLabor() : null);
+      if (!next) return;
+      hydrateStateFrom(next);
+      syncFormFromState();
+      render();
+    });
+    unsubscribeBlueprint = store.subscribe("blueprint:summary", (payload = {}) => {
+      blueprintSummary = payload?.summary || (store.getBlueprintSummary ? store.getBlueprintSummary() : null);
+      renderBlueprintSummary(blueprintSummary);
+    });
+  }
+
+  if (r.bpImport) {
+    r.bpImport.addEventListener("click", () => {
+      if (!blueprintSummary || !Object.keys(blueprintSummary.byIcon || {}).length) {
+        toast("No blueprint markers available yet");
+        return;
+      }
+      importBlueprintMaterials(blueprintSummary);
+    });
+  }
+  if (r.bpItems) {
+    r.bpItems.addEventListener("click", (event) => {
+      const btn = event.target.closest("[data-bp-add]");
+      if (!btn) return;
+      addBlueprintMaterial(btn.dataset.bpAdd);
+    });
+  }
+
+  const onBlueprintDataUpdate = (ev) => {
+    if (!ev?.detail?.blueprintSummary) return;
+    blueprintSummary = ev.detail.blueprintSummary;
+    renderBlueprintSummary(blueprintSummary);
+  };
+  document.addEventListener("ui:data:update", onBlueprintDataUpdate);
+
   // Save
   r.btnSave.addEventListener("click", ()=>{ save(); toast("Saved"); });
 
@@ -380,6 +459,7 @@ export default function mount(el, props = {}) {
 
   // --------- render + eventos ---------
   render();
+  renderBlueprintSummary(blueprintSummary);
 
   return {
     getState(){ return JSON.parse(JSON.stringify(state)); },
@@ -387,10 +467,100 @@ export default function mount(el, props = {}) {
     destroy(){
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("ui:sidebar:toggle", onAsideToggle);
+      document.removeEventListener("ui:data:update", onBlueprintDataUpdate);
+      if (unsubscribeStore) try { unsubscribeStore(); } catch {}
+      if (unsubscribeBlueprint) try { unsubscribeBlueprint(); } catch {}
     }
   };
 
   /* ================= helpers ================= */
+  function renderBlueprintSummary(summary) {
+    if (!r.bpSummary) return;
+    const hasData = summary && summary.byIcon && Object.keys(summary.byIcon).length;
+    if (!hasData) {
+      r.bpSummary.style.display = "none";
+      if (r.bpItems) r.bpItems.innerHTML = "";
+      return;
+    }
+    r.bpSummary.style.display = "";
+    const totalIcons = summary.totals?.totalIcons ?? 0;
+    const totalPages = summary.totals?.totalPages ?? 0;
+    const meta = `${humanizeBlueprintTimestamp(summary.updatedAt)} | ${totalIcons} marker${totalIcons === 1 ? "" : "s"} on ${totalPages} page${totalPages === 1 ? "" : "s"}`;
+    if (r.bpMeta) r.bpMeta.textContent = meta;
+    if (!r.bpItems) return;
+    const items = Object.entries(summary.byIcon || {}).sort((a,b) => b[1] - a[1]);
+    if (!items.length) {
+      r.bpItems.innerHTML = '<div class="text-sm text-slate-400">No markers detected yet.</div>';
+      return;
+    }
+    r.bpItems.innerHTML = items.map(([icon, count]) => {
+      const color = blueprintColorForIcon(icon, summary);
+      return `
+        <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-3 flex items-center justify-between">
+          <div>
+            <div class="text-slate-100 font-semibold">${esc(icon)}</div>
+            <div class="text-slate-400 text-sm">${count} marker${count === 1 ? "" : "s"}</div>
+          </div>
+          <button class="btn-ghost" data-bp-add="${escAttr(icon)}">Add</button>
+        </div>`;
+    }).join("");
+  }
+
+  function blueprintColorForIcon(icon, summary) {
+    if (!summary?.byIconColor) return "#60A5FA";
+    const entry = Object.keys(summary.byIconColor).find(key => key.startsWith(`${icon}|`));
+    if (!entry) return "#60A5FA";
+    const [, color] = entry.split("|");
+    return (color || "#60A5FA").trim();
+  }
+
+  function mergeBlueprintMaterial(icon, count) {
+    const existing = state.materials.find(m => (m.name || "").toLowerCase() === icon.toLowerCase());
+    if (existing) {
+      existing.qty = clampNum((existing.qty || 0) + count, 0, 1e9);
+      return false;
+    }
+    state.materials.push({ name: icon, qty: count, unit: 0 });
+    return true;
+  }
+
+  function addBlueprintMaterial(icon) {
+    if (!blueprintSummary || !blueprintSummary.byIcon?.[icon]) {
+      toast(`No markers available for "${icon}"`);
+      return;
+    }
+    const count = blueprintSummary.byIcon[icon];
+    mergeBlueprintMaterial(icon, count);
+    save(); render();
+    toast(`${count} marker${count === 1 ? "" : "s"} of ${icon} added to materials`);
+  }
+
+  function importBlueprintMaterials(summary) {
+    let created = 0;
+    let updated = 0;
+    for (const [icon, count] of Object.entries(summary.byIcon || {})) {
+      if (!count) continue;
+      const isNew = mergeBlueprintMaterial(icon, count);
+      if (isNew) created += 1; else updated += 1;
+    }
+    save(); render();
+    renderBlueprintSummary(summary);
+    const message = created || updated
+      ? `Blueprint import complete (${created} new, ${updated} updated)`
+      : "Blueprint data already reflected";
+    toast(message);
+  }
+
+  function humanizeBlueprintTimestamp(ts) {
+    if (!ts) return "Just updated";
+    try {
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return "Just updated";
+      return `Updated ${d.toLocaleString()}`;
+    } catch {
+      return "Just updated";
+    }
+  }
 
   function render() {
     // tablas
@@ -588,7 +758,24 @@ export default function mount(el, props = {}) {
     return { materials, labor };
   }
 
-  function save(){ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+  function save(){
+    const snap = JSON.parse(JSON.stringify({
+      currency: state.currency,
+      materials: state.materials,
+      labor: state.labor,
+      contractors: state.contractors,
+      allocation: state.allocation,
+      overheadPct: state.overheadPct,
+      profitPct: state.profitPct,
+      taxPct: state.taxPct
+    }));
+    try { localStorage.setItem(LS_KEY, JSON.stringify(snap)); }
+    catch (e) { console.warn("MaterialLabor local save failed", e); }
+    if (STORE_READY && typeof store.saveMaterialLabor === "function") {
+      try { store.saveMaterialLabor(snap); }
+      catch (e) { console.warn("AppStore saveMaterialLabor failed", e); }
+    }
+  }
 
   // --------- utilidades ---------
   function fmtMoney(n){
@@ -643,3 +830,6 @@ function injectOnce(id, css){
   if (document.getElementById(id)) return;
   const st = document.createElement("style"); st.id=id; st.textContent=css; document.head.appendChild(st);
 }
+
+
+

@@ -11,6 +11,25 @@ export default function mount(el, props = {}) {
   const brand = String(props.brand ?? "market-fx.ts");
   /** @type {Array} sections/ items */
   const nav = Array.isArray(props.items) ? props.items : [];
+  // Garantizar que exista el ítem Manual Drawing para evitar que se pierda por mounts parciales
+  try {
+    const hasManual = nav.some(n => {
+      if (n.section) return Array.isArray(n.items) && n.items.some(i => (i.href || '') === '#manualprinted');
+      return (n.href || '') === '#manualprinted';
+    });
+    if (!hasManual) {
+      // Intentar encontrar sección Analysis
+      let sec = nav.find(n => n.section && String(n.section).toLowerCase() === 'analysis');
+      if (sec) {
+        sec.items = sec.items || [];
+        if (!sec.items.some(i => (i.href || '') === '#manualprinted')) {
+          sec.items.push({ label: 'Manual Drawing', href: '#manualprinted', icon: 'pencil' });
+        }
+      } else {
+        nav.push({ section: 'Analysis', items: [{ label: 'Manual Drawing', href: '#manualprinted', icon: 'pencil' }] });
+      }
+    }
+  } catch (e) { console.warn('Error ensuring manualprinted nav item:', e); }
   const footer = props.footer ?? [{ label: "Settings", href: "#settings", icon: "cog" }];
   
   console.log('🚀 Final nav array:', nav); // Debug
@@ -324,7 +343,7 @@ export default function mount(el, props = {}) {
 
   function profileCard(p = {}) {
     const name = p.name ?? "User";
-    const email = p.email ?? "user@blueprint.com";
+    const email = p.email ?? "user@steeleye.com";
     const initials = (p.initials ?? getInitials(name)).slice(0, 2).toUpperCase();
     return `
       <div class="mt-2">
@@ -383,6 +402,8 @@ export default function mount(el, props = {}) {
     </div>`;
   }
   function icon(name) {
+    // Preferir lucide si está disponible
+    try { if (window.renderLucideIcon) { const luc = window.renderLucideIcon(name); if (luc) return luc; } } catch (e) { }
     const s = {
       grid: `<svg viewBox="0 0 24 24" fill="currentColor" class="opacity-90"><path d="M3 3h8v8H3zM13 3h8v8h-8zM3 13h8v8H3zM13 13h8v8h-8z"/></svg>`,
       box: `<svg viewBox="0 0 24 24" fill="currentColor" class="opacity-90"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/></svg>`,
@@ -460,13 +481,13 @@ export function createComponent(props) {
       console.log('Current user from auth:', user); // Debug
       return {
         name: user.name || "User",
-        email: user.email || "user@blueprint.com",
+        email: user.email || "user@steeleye.com",
         initials: user.name ? user.name.split(' ').map(n => n[0]).join('').toUpperCase() : "U"
       };
     }
     return {
       name: "John Smith",
-      email: "john@blueprint.com", 
+      email: "john@steeleye.com", 
       initials: "JS"
     };
   };

@@ -1,29 +1,76 @@
-// /js/components/project-management/project-management.js
-// Project Management — Dark Pro, empty first, icon actions, sticky header, inline edit.
+﻿// /js/components/project-management/project-management.js
+// Project Management â€” Dark Pro, empty first, icon actions, sticky header, inline edit.
 // Eventos que emite:
 //   - pm:project:create { project }
 //   - pm:project:update { project }
 //   - pm:project:delete { id }
 //   - ui:navigate       { href }
-// Integración de datos:
+// IntegraciÃ³n de datos:
 //   document.dispatchEvent(new CustomEvent("ui:data:update",{detail:{projects:[...]}}))
 //   const api = mount(el); api.update({projects:[...]})
-// NOTA: La tabla comienza VACÍA por defecto. Solo se llena cuando creas o envías datos.
+// NOTA: La tabla comienza VACÃA por defecto. Solo se llena cuando creas o envÃ­as datos.
 
 export default function mount(el, props = {}) {
   ensureGlobalBackground();
 
   const toArray = (x) => Array.isArray(x) ? x : (x && typeof x === "object") ? Object.values(x) : [];
 
-  // Estado — arrancamos VACÍO aunque vengan props; si querés pre-cargar, usa api.update()
+  // Estado â€” arrancamos VACÃO aunque vengan props; si querÃ©s pre-cargar, usa api.update()
   let state = {
     title: String(props.title ?? "PROJECT MANAGEMENT"),
-    projects: [], // <-- vacío por defecto
+    projects: [], // <-- vacÃ­o por defecto
     sortBy: "startDate",
     sortDir: "desc",
     editingId: null,
     filters: { status:"all", dateFrom:"", dateTo:"", client:"", q:"" }
   };
+
+  const store = (window.AppStore && typeof window.AppStore.getProjects === "function") ? window.AppStore : null;
+  const STORE_READY = !!store;
+  const FALLBACK_KEY = "app.pm.projects.v1";
+
+  const fallbackProjects = {
+    load(){
+      try{
+        const raw = localStorage.getItem(FALLBACK_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed : [];
+      }catch{ return []; }
+    },
+    save(list){
+      try{ localStorage.setItem(FALLBACK_KEY, JSON.stringify(Array.isArray(list) ? list : [])); }
+      catch(e){ console.warn("Project fallback save failed", e); }
+    }
+  };
+
+  function persistProjectList(list){
+    if (STORE_READY && typeof store.setProjects === "function"){
+      store.setProjects(list);
+    } else {
+      fallbackProjects.save(list);
+    }
+  }
+  function persistProjectUpsert(project){
+    if (STORE_READY && typeof store.upsertProject === "function"){
+      store.upsertProject(project);
+    } else {
+      const list = fallbackProjects.load();
+      const idx = list.findIndex(p => String(p?.id) === String(project?.id));
+      if (idx >= 0) list[idx] = Object.assign({}, list[idx], project);
+      else list.push(project);
+      fallbackProjects.save(list);
+      state.projects = list;
+    }
+  }
+  function persistProjectRemove(id){
+    if (STORE_READY && typeof store.removeProject === "function"){
+      store.removeProject(id);
+    } else {
+      const list = fallbackProjects.load().filter(p => String(p?.id) !== String(id));
+      fallbackProjects.save(list);
+      state.projects = list;
+    }
+  }
 
   injectOnce("pm-css", `
     :root{
@@ -112,7 +159,7 @@ export default function mount(el, props = {}) {
             <input class="pm-input" type="text" data-filter="client" placeholder="Client"/>
             <div class="pm-search">
               ${icoSearch()}
-              <input type="search" placeholder="Search projects, clients, notes… (Ctrl/Cmd + F)" data-filter="q"/>
+              <input type="search" placeholder="Search projects, clients, notesâ€¦ (Ctrl/Cmd + F)" data-filter="q"/>
             </div>
           </div>
         </div>
@@ -159,7 +206,7 @@ export default function mount(el, props = {}) {
     q: qs('[data-filter="q"]'),
   };
 
-  // margen según aside
+  // margen segÃºn aside
   function asideExpanded() {
     const aside = document.querySelector('aside[data-aside]');
     return aside ? (aside.dataset.state === "expanded") : true;
@@ -214,7 +261,7 @@ export default function mount(el, props = {}) {
   // nuevo
   ;[newBtn, firstNewBtn].forEach(btn=> btn?.addEventListener("click", openCreateModal));
 
-  // búsqueda teclado
+  // bÃºsqueda teclado
   const onKey = (e) => {
     const isMac = navigator.platform.toUpperCase().includes("MAC");
     if ((isMac ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === "f") {
@@ -228,24 +275,51 @@ export default function mount(el, props = {}) {
     const detail = ev.detail || {};
     if ("projects" in detail) {
       state.projects = toArray(detail.projects);
+      persistProjectList(state.projects);
       renderTable();
     }
   };
   document.addEventListener("ui:data:update", onDataUpdate);
 
-  // primer render (VACÍO)
+  function hydrateProjects(initial = false){
+    const fromStore = STORE_READY ? toArray(store.getProjects()) : [];
+    const fallback = STORE_READY ? [] : fallbackProjects.load();
+    let next = fromStore.length ? fromStore : fallback;
+    if (!next.length && Array.isArray(props.projects) && props.projects.length){
+      next = toArray(props.projects);
+      persistProjectList(next);
+    }
+    state.projects = toArray(next);
+    if (!initial) renderTable();
+  }
+  hydrateProjects(true);
+
+  let unsubscribeStore = null;
+  if (STORE_READY && typeof store.subscribe === "function"){
+    unsubscribeStore = store.subscribe("projects:changed", (payload = {}) => {
+      const list = "projects" in payload ? toArray(payload.projects) : toArray(store.getProjects());
+      state.projects = list;
+      renderTable();
+    });
+  }
+
+  // initial render (synced with store/local data)
   renderTable();
 
-  // API pública
+  // API pÃºblica
   const api = {
     update(data = {}) {
-      if ("projects" in data) state.projects = toArray(data.projects);
+      if ("projects" in data) {
+        state.projects = toArray(data.projects);
+        persistProjectList(state.projects);
+      }
       renderTable();
     },
     destroy(){
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("ui:sidebar:toggle", onAsideToggle);
       document.removeEventListener("ui:data:update", onDataUpdate);
+      if (unsubscribeStore) try { unsubscribeStore(); } catch {}
       statusDD.destroy();
     }
   };
@@ -282,13 +356,13 @@ export default function mount(el, props = {}) {
     return `
       <tr class="pm-row" data-id="${escapeAttr(r.id||"")}" tabindex="0">
         <td class="pm-td">
-          <div class="title">${escapeHTML(r.name||"") || '<span class="muted">—</span>'}</div>
+          <div class="title">${escapeHTML(r.name||"") || '<span class="muted">â€”</span>'}</div>
           <div class="sub">${escapeHTML(r.id||"")}</div>
         </td>
         <td class="pm-td">${statusChip(r.status)}</td>
         <td class="pm-td">${fmtDate(r.startDate)}</td>
-        <td class="pm-td uppercase tracking-wide" style="color:#D1D5DB">${escapeHTML(r.client || "—")}</td>
-        <td class="pm-td"><span class="muted">${escapeHTML(r.notes || "—")}</span></td>
+        <td class="pm-td uppercase tracking-wide" style="color:#D1D5DB">${escapeHTML(r.client || "â€”")}</td>
+        <td class="pm-td"><span class="muted">${escapeHTML(r.notes || "â€”")}</span></td>
         <td class="pm-td">
           <div class="act">
             <button class="icon-btn ok"     title="Open"   data-open>${icoOpen()}</button>
@@ -368,6 +442,7 @@ export default function mount(el, props = {}) {
     p.startDate = get("startDate") || "";
     p.client = get("client").trim();
     p.notes = tr.querySelector('[name="notes"]')?.value.trim() || "";
+    persistProjectUpsert(p);
     el.dispatchEvent(new CustomEvent("pm:project:update", { bubbles:true, detail:{ project:{...p} }}));
     state.editingId = null; renderTable();
   }
@@ -376,6 +451,7 @@ export default function mount(el, props = {}) {
     const p = findById(id); if (!p) return;
     if (!confirm(`Delete project "${p.name || id}"?`)) return;
     state.projects = toArray(state.projects).filter(x => String(x.id)!==String(id));
+    persistProjectRemove(id);
     el.dispatchEvent(new CustomEvent("pm:project:delete", { bubbles:true, detail:{ id }}));
     renderTable();
   }
@@ -433,6 +509,7 @@ export default function mount(el, props = {}) {
       const cancelled = !el.dispatchEvent(ev) ? true : ev.defaultPrevented;
       if (!cancelled) {
         state.projects.push(project);
+        persistProjectUpsert(project);
         renderTable();
         close();
       }
@@ -451,11 +528,11 @@ export default function mount(el, props = {}) {
       Closed:   { bg: "rgba(100,116,139,.18)", fg: "#94A3B8" },
     };
     const c = map[s] || map.Pending;
-    return `<span class="pm-chip" style="background:${c.bg};color:${c.fg}"><i class="pm-chip-dot" style="background:${c.fg}"></i>${escapeHTML(s||"—")}</span>`;
+    return `<span class="pm-chip" style="background:${c.bg};color:${c.fg}"><i class="pm-chip-dot" style="background:${c.fg}"></i>${escapeHTML(s||"â€”")}</span>`;
   }
 
   function fmtDate(iso) {
-    if (!iso) return "—";
+    if (!iso) return "â€”";
     const [y,m,d] = String(iso).split("-").map(Number);
     if (!y || !m || !d) return escapeHTML(iso);
     return `${String(d).padStart(2,"0")}/${String(m).padStart(2,"0")}/${y}`;
@@ -506,7 +583,7 @@ export default function mount(el, props = {}) {
 
 // Fondo dark global coherente
 function ensureGlobalBackground(){ injectOnce("pm-global-bg", `body{background:radial-gradient(1200px 600px at 20% 0%, #0F1720 0%, #0B0F14 60%, #0B0F14 100%); color:#E5E7EB}`); }
-// Inyección CSS única
+// InyecciÃ³n CSS Ãºnica
 function injectOnce(id, css){ if(document.getElementById(id)) return; const st=document.createElement("style"); st.id=id; st.textContent=css; document.head.appendChild(st); }
 
 // --- Iconos SVG (inline, livianos) ---

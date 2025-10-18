@@ -204,6 +204,28 @@ export default function mountSettings(el, props = {}) {
         toastQueue.push({ msg, kind });
         if (!toastTimer) runToast();
     }
+
+  // Theme handling: apply themeMode ('dark' | 'light' | 'auto') globally
+  let _prefersMedia = null;
+  function applyTheme(mode) {
+    try {
+      mode = mode || 'auto';
+      if (mode === 'auto') {
+        // follow system
+        if (!_prefersMedia) _prefersMedia = window.matchMedia('(prefers-color-scheme: dark)');
+        const systemDark = _prefersMedia.matches;
+        document.documentElement.setAttribute('data-theme', systemDark ? 'dark' : 'light');
+        // ensure we listen for changes
+        _prefersMedia.addEventListener?.('change', e => {
+          document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light');
+        });
+      } else {
+        document.documentElement.setAttribute('data-theme', mode === 'dark' ? 'dark' : 'light');
+      }
+      // persist to localStorage too for immediate use by other parts
+      try { localStorage.setItem('app.theme.mode', mode); } catch (e) { }
+    } catch (e) { /* ignore */ }
+  }
     function runToast() {
         const item = toastQueue.shift(); if (!item) { toastTimer = null; return; }
         const bar = document.createElement('div');
@@ -330,8 +352,10 @@ export default function mountSettings(el, props = {}) {
         </div>
         <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
           <label class="text-sm text-slate-300"><span class="block mb-1">Theme</span>
-            <select name="theme" class="w-full rounded-lg bg-slate-800 border border-slate-700 text-slate-100 px-3 py-2">
-              <option selected value="dark">Dark</option>
+            <select name="themeMode" class="w-full rounded-lg bg-slate-800 border border-slate-700 text-slate-100 px-3 py-2">
+              <option ${d.preferences.themeMode === 'dark' ? 'selected' : ''} value="dark">Dark</option>
+              <option ${d.preferences.themeMode === 'light' ? 'selected' : ''} value="light">Light</option>
+              <option ${!d.preferences.themeMode || d.preferences.themeMode === 'auto' ? 'selected' : ''} value="auto">Auto (system)</option>
             </select>
           </label>
           <label class="text-sm text-slate-300"><span class="block mb-1">Density</span>
@@ -664,15 +688,17 @@ export default function mountSettings(el, props = {}) {
 
         if (state.panel === 'preferences') {
             $('[data-action="save-preferences"]').addEventListener('click', async () => {
-                const patch = {
-                    preferences: {
-                        theme: panels.querySelector('[name="theme"]').value,
-                        density: panels.querySelector('[name="density"]').value,
-                        sidebarCollapsed: panels.querySelector('[name="sidebarCollapsed"]').checked,
-                    }
-                };
+        const patch = {
+          preferences: {
+            themeMode: panels.querySelector('[name="themeMode"]').value,
+            density: panels.querySelector('[name="density"]').value,
+            sidebarCollapsed: panels.querySelector('[name="sidebarCollapsed"]').checked,
+          }
+        };
                 await provider.savePatch(patch);
                 state.data = await provider.getAll();
+        // Apply theme immediately
+        try { applyTheme(state.data.preferences.themeMode); } catch(e){}
                 toast('Preferences saved');
                 render();
             });
@@ -931,7 +957,9 @@ export default function mountSettings(el, props = {}) {
 
     async function init() {
         state.data = await provider.getAll();
-        render();
+    // Apply theme stored in preferences (themeMode) if present
+    try { applyTheme(state.data?.preferences?.themeMode || localStorage.getItem('app.theme.mode') || 'auto'); } catch(e){}
+    render();
     }
 
     init();

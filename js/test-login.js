@@ -19,7 +19,7 @@ window.testLogin = function() {
     
     if (email && password) {
         // Llenar campos con datos de prueba
-        email.value = 'admin@blueprint.com';
+        email.value = 'admin@steeleye.com';
         password.value = 'Bp2025!Admin#';
         console.log('✅ Campos llenados con datos de prueba');
         

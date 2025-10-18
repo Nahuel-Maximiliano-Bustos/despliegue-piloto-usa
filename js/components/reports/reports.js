@@ -1,4 +1,4 @@
-// reports.js — CRUD completo de Reports en modo oscuro, listo para producción sin backend
+﻿// reports.js â€” CRUD completo de Reports en modo oscuro, listo para producciÃ³n sin backend
 export default function mountReports(el, props = {}) {
   // ---------------------------
   // Config
@@ -6,20 +6,30 @@ export default function mountReports(el, props = {}) {
   const cfg = {
     storageKey: props.storageKey ?? "app.reports.v1",
     projects: props.projects ?? ["PR-01", "PR-02", "PR-03"],
-    // si mañana conectás backend, reemplazá loadAll/saveOne/deleteOne
+    // si maÃ±ana conectÃ¡s backend, reemplazÃ¡ loadAll/saveOne/deleteOne
   };
+  const store = window.AppStore;
+  const STORE_READY = !!(store && typeof store.getReports === "function");
+  const unsubscribeTokens = [];
 
+  const dataSources = {
+    blueprint: store?.getBlueprintSummary?.() || null,
+    materialLabor: store?.getMaterialLabor?.() || {},
+    suppliers: store?.getSuppliers?.() || [],
+    costControl: store?.getCostControl?.() || {},
+    projects: store?.getProjects?.() || []
+  };
   // ---------------------------
   // Estado
   // ---------------------------
   const state = {
     reports: [],        // [{id, name, project, sections, data, createdAt, updatedAt}]
     selectedId: null,   // id del reporte seleccionado
-    filter: "",         // texto de búsqueda
+    filter: "",         // texto de bÃºsqueda
     format: "pdf",      // pdf|csv|json
     loading: false,
     error: null,
-    editMode: false,    // true cuando se está editando (o creando)
+    editMode: false,    // true cuando se estÃ¡ editando (o creando)
   };
 
   let previewTimer = null;
@@ -27,7 +37,7 @@ export default function mountReports(el, props = {}) {
   // ---------------------------
   // Persistence (LocalStorage)
   // ---------------------------
-  const persist = {
+  const localPersist = {
     loadAll() {
       try {
         const raw = localStorage.getItem(cfg.storageKey);
@@ -38,16 +48,35 @@ export default function mountReports(el, props = {}) {
       localStorage.setItem(cfg.storageKey, JSON.stringify(list));
     },
     saveOne(report) {
-      const all = persist.loadAll();
+      const all = localPersist.loadAll();
       const i = all.findIndex(r => r.id === report.id);
       if (i >= 0) all[i] = report; else all.push(report);
-      persist.saveAll(all);
+      localPersist.saveAll(all);
     },
     deleteOne(id) {
-      const all = persist.loadAll().filter(r => r.id !== id);
-      persist.saveAll(all);
+      const all = localPersist.loadAll().filter(r => r.id !== id);
+      localPersist.saveAll(all);
     }
   };
+  const persist = STORE_READY ? {
+    loadAll() {
+      try { return store.getReports() || []; }
+      catch (err) { console.warn("reports: falling back to local cache", err); return localPersist.loadAll(); }
+    },
+    saveAll(list) {
+      localPersist.saveAll(list);
+      try { store.setReports(list); } catch (err) { console.warn("reports: setReports failed", err); }
+    },
+    saveOne(report) {
+      localPersist.saveOne(report);
+      try { store.upsertReport(report); } catch (err) { console.warn("reports: upsertReport failed", err); }
+    },
+    deleteOne(id) {
+      localPersist.deleteOne(id);
+      try { store.removeReport(id); } catch (err) { console.warn("reports: removeReport failed", err); }
+    }
+  } : localPersist;
+
 
   // ---------------------------
   // Helpers
@@ -75,10 +104,111 @@ export default function mountReports(el, props = {}) {
     Object.assign(state, patch);
     render();
   };
+  const toArray = (value) => {
+    if (Array.isArray(value)) return value;
+    if (value && typeof value === "object") return Object.values(value);
+    return [];
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  };
+
+  function summarizeMaterialLaborSummary(materialLabor = {}) {
+    const materials = toArray(materialLabor.materials).map((item) => ({
+      qty: Number(item.qty) || 0,
+      unit: Number(item.unit) || 0
+    }));
+    const labor = toArray(materialLabor.labor).map((item) => ({
+      hours: Number(item.hours) || 0,
+      rate: Number(item.rate) || 0
+    }));
+    const materialTotal = materials.reduce((acc, m) => acc + m.qty * m.unit, 0);
+    const laborTotal = labor.reduce((acc, l) => acc + l.hours * l.rate, 0);
+    const subtotal = materialTotal + laborTotal;
+    const overhead = subtotal * ((Number(materialLabor.overheadPct) || 0) / 100);
+    const profit = (subtotal + overhead) * ((Number(materialLabor.profitPct) || 0) / 100);
+    const tax = (subtotal + overhead + profit) * ((Number(materialLabor.taxPct) || 0) / 100);
+    const total = subtotal + overhead + profit + tax;
+    return {
+      materials: materialTotal,
+      labor: laborTotal,
+      subtotal,
+      overhead,
+      profit,
+      tax,
+      total
+    };
+  }
+
+  function summarizeMaterialLabor(materialLabor = {}) {
+    return {
+      totals: summarizeMaterialLaborSummary(materialLabor)
+    };
+  }
+
+  function computeSupplierStatsLocal(list = []) {
+    return list.reduce((acc, row) => {
+      const total = (Number(row.qty) || 0) * (Number(row.unitPrice) || 0);
+      acc.committed += total;
+      const delivered = row.status === "Delivered" || row.status === "Cancelled";
+      if (!delivered) acc.open += 1;
+      if (!delivered && row.deliveryDate) {
+        const eta = new Date(row.deliveryDate);
+        if (!Number.isNaN(eta.getTime()) && eta < new Date()) acc.delayed += 1;
+      }
+      return acc;
+    }, { committed: 0, open: 0, delayed: 0 });
+  }
+
+  const refreshDataSources = () => {
+    if (STORE_READY) {
+      try {
+        if (typeof store.getBlueprintSummary === "function") dataSources.blueprint = store.getBlueprintSummary();
+        if (typeof store.getMaterialLabor === "function") dataSources.materialLabor = store.getMaterialLabor();
+        if (typeof store.getSuppliers === "function") dataSources.suppliers = store.getSuppliers();
+        if (typeof store.getCostControl === "function") dataSources.costControl = store.getCostControl();
+        if (typeof store.getProjects === "function") dataSources.projects = store.getProjects();
+      } catch (err) {
+        console.warn("reports: refreshDataSources failed", err);
+      }
+    }
+    const summary = summarizeMaterialLaborSummary(dataSources.materialLabor);
+    dataSources.materialSummary = summary;
+    dataSources.supplierStats = computeSupplierStatsLocal(dataSources.suppliers);
+  };
+
+  refreshDataSources();
+
+  const trackUnsubscribe = (fn) => { if (typeof fn === "function") unsubscribeTokens.push(fn); };
+  const subscribeStoreEvent = (event, handler) => {
+    if (!STORE_READY || typeof store.subscribe !== "function") return;
+    try {
+      const unsub = store.subscribe(event, handler);
+      trackUnsubscribe(unsub);
+    } catch (err) {
+      console.warn(`reports: failed subscribing to ${event}`, err);
+    }
+  };
+
 
   // Default sections + data template
+
+  const onBridgeData = (event) => {
+    const detail = event?.detail || {};
+    if (detail.blueprintSummary) dataSources.blueprint = detail.blueprintSummary;
+    if (detail.materialLabor) dataSources.materialLabor = detail.materialLabor;
+    if (detail.materialSummary) dataSources.materialSummary = detail.materialSummary;
+    if (Array.isArray(detail.suppliers)) dataSources.suppliers = detail.suppliers;
+    if (detail.costControl) dataSources.costControl = detail.costControl;
+    if (Array.isArray(detail.projects)) dataSources.projects = detail.projects;
+    refreshDataSources();
+    if (state.editMode) schedulePreview();
+  };
+
+  document.addEventListener("ui:data:update", onBridgeData);
+  unsubscribeTokens.push(() => document.removeEventListener("ui:data:update", onBridgeData));
+
   const defaultSections = () => ([
     { key: "details",   label: "Project details", enabled: true },
+    { key: "blueprint", label: "Blueprint summary", enabled: true },
     { key: "materials", label: "Materials",       enabled: true },
     { key: "labor",     label: "Labor",           enabled: true },
     { key: "budget",    label: "Budget",          enabled: true },
@@ -86,22 +216,64 @@ export default function mountReports(el, props = {}) {
     { key: "notes",     label: "Notes",           enabled: true },
   ]);
 
-  const defaultData = (projectId) => ({
-    details: {
-      name: projectId,
-      title: `Project ${projectId}`,
-      manager: "",
-      start: "",
-      end: "",
-      status: "Draft",
-    },
-    materials: [],
-    labor: [],
-    budget: { capex: 0, opex: 0, spent: 0 },
-    suppliers: [],
-    notes: [],
-  });
-
+  const defaultData = (projectId) => {
+    const materialLabor = dataSources.materialLabor || {};
+    const blueprint = dataSources.blueprint || null;
+    const suppliers = Array.isArray(dataSources.suppliers) ? dataSources.suppliers : [];
+    const project = projectId || getDefaultProject();
+    const materialItems = toArray(materialLabor.materials).map((m) => {
+      const qty = Number(m.qty) || 0;
+      const unitCost = Number(m.unit) || Number(m.unitCost) || 0;
+      return {
+        item: m.name || "Item",
+        qty,
+        unit: unitCost,
+        cost: qty * unitCost
+      };
+    });
+    const laborItems = toArray(materialLabor.labor).map((l) => ({
+      role: l.role || "Role",
+      hours: Number(l.hours) || 0,
+      rate: Number(l.rate) || 0,
+      lineTotal: (Number(l.hours) || 0) * (Number(l.rate) || 0)
+    }));
+    const totals = summarizeMaterialLaborSummary(materialLabor);
+    const supplierItems = suppliers.map((row) => ({
+      supplier: row.supplier || "Supplier",
+      material: row.material || "",
+      qty: Number(row.qty) || 0,
+      total: (Number(row.qty) || 0) * (Number(row.unitPrice) || 0),
+      status: row.status || ""
+    }));
+    const notes = [];
+    if (blueprint?.totals?.totalIcons) {
+      notes.push(`Detected ${blueprint.totals.totalIcons} blueprint marker${blueprint.totals.totalIcons === 1 ? "" : "s"}.`);
+    }
+    return {
+      details: {
+        name: project,
+        title: `Project ${project}`,
+        manager: "",
+        start: "",
+        end: "",
+        status: "Draft"
+      },
+      blueprint: blueprint ? {
+        totals: blueprint.totals || null,
+        byIcon: blueprint.byIcon || {},
+        updatedAt: blueprint.updatedAt || null
+      } : null,
+      materials: materialItems,
+      labor: laborItems,
+      budget: {
+        capex: totals.materials,
+        opex: totals.labor,
+        spent: totals.total
+      },
+      suppliers: supplierItems,
+      notes
+    };
+  };
   const selected = () => state.reports.find(r => r.id === state.selectedId) || null;
   const enabledSections = (rep) => (rep?.sections || []).filter(s => s.enabled);
 
@@ -118,7 +290,7 @@ export default function mountReports(el, props = {}) {
         </svg>
         <h1 class="text-5xl md:text-6xl font-black tracking-tight text-slate-50">Reports</h1>
       </div>
-      <p class="mt-2 text-lg text-slate-400">Generate • Manage • Export</p>
+      <p class="mt-2 text-lg text-slate-400">Generate â€¢ Manage â€¢ Export</p>
 
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-8">
         <!-- Sidebar: Listado -->
@@ -126,7 +298,7 @@ export default function mountReports(el, props = {}) {
           <div class="flex gap-2">
             <input type="text" data-role="search"
               class="flex-1 rounded-lg bg-slate-800 text-slate-100 px-3 py-2 placeholder-slate-500 border border-slate-700"
-              placeholder="Search reports (name or project)…"/>
+              placeholder="Search reports (name or project)â€¦"/>
             <button data-role="new"
               class="rounded-lg bg-blue-600 hover:bg-blue-500 text-white px-3 py-2">New</button>
           </div>
@@ -179,7 +351,7 @@ export default function mountReports(el, props = {}) {
                 </label>
                 <label class="text-sm text-slate-300">
                   <span class="block mb-1">Status</span>
-                  <input name="status" class="w-full rounded-lg bg-slate-800 border border-slate-700 text-slate-100 px-3 py-2" placeholder="On track, At risk…"/>
+                  <input name="status" class="w-full rounded-lg bg-slate-800 border border-slate-700 text-slate-100 px-3 py-2" placeholder="On track, At riskâ€¦"/>
                 </label>
               </div>
 
@@ -236,7 +408,7 @@ export default function mountReports(el, props = {}) {
               <fieldset class="border border-slate-800 rounded-xl p-3">
                 <legend class="px-2 text-slate-200">Sections</legend>
                 <ul data-role="sections" class="grid sm:grid-cols-2 gap-2"></ul>
-                <div class="text-xs text-slate-400 mt-1">Tip: clic en el nombre para activar/desactivar; ↑/↓ para reordenar.</div>
+                <div class="text-xs text-slate-400 mt-1">Tip: clic en el nombre para activar/desactivar; â†‘/â†“ para reordenar.</div>
               </fieldset>
 
               <div class="flex items-center justify-end gap-2">
@@ -285,6 +457,28 @@ export default function mountReports(el, props = {}) {
     projectSelect.appendChild(opt);
   });
 
+  function syncProjectOptions() {
+    if (!projectSelect) return;
+    const seen = new Set(Array.from(projectSelect.options).map((opt) => opt.value));
+    toArray(dataSources.projects).forEach((proj) => {
+      const val = typeof proj === "string" ? proj : (proj?.id || proj?.name || proj?.code);
+      if (!val || seen.has(val)) return;
+      const opt = document.createElement("option");
+      opt.value = opt.textContent = val;
+      projectSelect.appendChild(opt);
+      seen.add(val);
+    });
+  }
+
+  function getDefaultProject() {
+    const list = toArray(dataSources.projects);
+    if (list.length) {
+      const first = list[0];
+      return typeof first === "string" ? first : (first?.id || first?.name || first?.code || cfg.projects[0]);
+    }
+    return cfg.projects[0];
+  }
+
   // ---------------------------
   // Render functions
   // ---------------------------
@@ -321,7 +515,7 @@ export default function mountReports(el, props = {}) {
     deleteBtn.disabled = !hasSel;
     editBtn.disabled   = !hasSel;
     fmtSel.value = state.format;
-    statusBox.textContent = hasSel ? (state.editMode ? "Editing…" : "Ready") : "No report selected";
+    statusBox.textContent = hasSel ? (state.editMode ? "Editingâ€¦" : "Ready") : "No report selected";
   }
 
   function renderEditor() {
@@ -329,10 +523,11 @@ export default function mountReports(el, props = {}) {
     editor.classList.toggle("hidden", !state.editMode);
 
     if (!rep || !state.editMode) return;
+    syncProjectOptions();
 
     // Fill top-level fields
     form.name.value = rep.name || "";
-    form.project.value = rep.project || cfg.projects[0];
+    form.project.value = rep.project || getDefaultProject();
     form.status.value = rep.data.details.status || "";
     form.start.value  = rep.data.details.start || "";
     form.end.value    = rep.data.details.end   || "";
@@ -362,8 +557,8 @@ export default function mountReports(el, props = {}) {
       <li class="flex items-center justify-between gap-2 rounded-lg border border-slate-800 px-2 py-1" data-index="${i}">
         <button type="button" data-action="toggle" class="flex-1 text-left ${s.enabled?'text-slate-200':'text-slate-500 line-through'}">${escapeHTML(s.label)}</button>
         <div class="flex items-center gap-1">
-          <button type="button" data-action="up"   class="rounded-md border border-slate-700 px-2 py-1 text-slate-200">↑</button>
-          <button type="button" data-action="down" class="rounded-md border border-slate-700 px-2 py-1 text-slate-200">↓</button>
+          <button type="button" data-action="up"   class="rounded-md border border-slate-700 px-2 py-1 text-slate-200">â†‘</button>
+          <button type="button" data-action="down" class="rounded-md border border-slate-700 px-2 py-1 text-slate-200">â†“</button>
         </div>
       </li>
     `).join("");
@@ -413,6 +608,34 @@ export default function mountReports(el, props = {}) {
           </div>
         </section>`;
     },
+    blueprint(d) {
+      const summary = d.blueprint;
+      if (!summary || !summary.totals) {
+        return `
+        <section>
+          <h4 class="font-semibold text-slate-200">Blueprint summary</h4>
+          <div class="text-sm text-slate-400 mt-2">No blueprint annotations captured.</div>
+        </section>`;
+      }
+      const totals = summary.totals;
+      const rows = Object.entries(summary.byIcon || {}).sort((a,b)=>b[1]-a[1]).map(([icon,count])=>`
+        <tr><td class="px-2 py-1">${escapeHTML(icon)}</td><td class="px-2 py-1 text-right">${count}</td></tr>
+      `).join("");
+      return `
+        <section>
+          <h4 class="font-semibold text-slate-200">Blueprint summary</h4>
+          <div class="mt-2 text-sm text-slate-300">
+            <div><b>Total markers:</b> ${totals.totalIcons || 0}</div>
+            <div><b>Total pages:</b> ${totals.totalPages || 0}</div>
+            <div><b>Last updated:</b> ${escapeHTML(summary.updatedAt ? human(summary.updatedAt) : "n/a")}</div>
+          </div>
+          <table class="mt-2 text-sm text-slate-300 border border-slate-800 rounded-xl overflow-hidden">
+            <thead class="bg-slate-900/60"><tr><th class="px-2 py-1 text-left">Icon</th><th class="px-2 py-1 text-right">Count</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="2" class="px-2 py-2 text-slate-500">No markers</td></tr>`}</tbody>
+          </table>
+        </section>`;
+    },
+
     materials(d) {
       const rows = (d.materials||[]).map(m=>`
         <tr>
@@ -488,7 +711,7 @@ export default function mountReports(el, props = {}) {
         </section>`;
     },
     notes(d) {
-      const items = (d.notes||[]).map(n=>`<li>• ${escapeHTML(n)}</li>`).join("");
+      const items = (d.notes||[]).map(n=>`<li>â€¢ ${escapeHTML(n)}</li>`).join("");
       return `
         <section class="mt-3">
           <h4 class="font-semibold text-slate-200">Notes</h4>
@@ -508,7 +731,7 @@ export default function mountReports(el, props = {}) {
       <input type="number" step="0.01" class="col-span-2 rounded bg-slate-800 border border-slate-700 text-slate-100 px-2 py-1" placeholder="Qty" value="${m.qty??""}"/>
       <input class="col-span-2 rounded bg-slate-800 border border-slate-700 text-slate-100 px-2 py-1" placeholder="Unit" value="${escapeHTML(m.unit||"")}"/>
       <input type="number" step="0.01" class="col-span-1 rounded bg-slate-800 border border-slate-700 text-slate-100 px-2 py-1" placeholder="$" value="${m.cost??""}"/>
-      <button type="button" class="col-span-1 rounded border border-red-900 text-red-300 hover:bg-red-950">×</button>
+      <button type="button" class="col-span-1 rounded border border-red-900 text-red-300 hover:bg-red-950">Ã—</button>
     `;
     row.lastElementChild.addEventListener("click", ()=> row.remove());
     materialsBox.appendChild(row);
@@ -522,7 +745,7 @@ export default function mountReports(el, props = {}) {
       <input type="number" step="0.01" class="col-span-2 rounded bg-slate-800 border border-slate-700 text-slate-100 px-2 py-1" placeholder="Hours" value="${l.hours??""}"/>
       <input type="number" step="0.01" class="col-span-2 rounded bg-slate-800 border border-slate-700 text-slate-100 px-2 py-1" placeholder="Rate" value="${l.rate??""}"/>
       <div class="col-span-1 text-slate-400 text-sm self-center text-right">= $</div>
-      <button type="button" class="col-span-1 rounded border border-red-900 text-red-300 hover:bg-red-950">×</button>
+      <button type="button" class="col-span-1 rounded border border-red-900 text-red-300 hover:bg-red-950">Ã—</button>
     `;
     row.lastElementChild.addEventListener("click", ()=> row.remove());
     laborBox.appendChild(row);
@@ -534,7 +757,7 @@ export default function mountReports(el, props = {}) {
     row.innerHTML = `
       <input class="col-span-6 rounded bg-slate-800 border border-slate-700 text-slate-100 px-2 py-1" placeholder="Name" value="${escapeHTML(s.name||"")}"/>
       <input class="col-span-5 rounded bg-slate-800 border border-slate-700 text-slate-100 px-2 py-1" placeholder="contact@email" value="${escapeHTML(s.contact||"")}"/>
-      <button type="button" class="col-span-1 rounded border border-red-900 text-red-300 hover:bg-red-950">×</button>
+      <button type="button" class="col-span-1 rounded border border-red-900 text-red-300 hover:bg-red-950">Ã—</button>
     `;
     row.lastElementChild.addEventListener("click", ()=> row.remove());
     suppliersBox.appendChild(row);
@@ -545,10 +768,17 @@ export default function mountReports(el, props = {}) {
     wrap.className = "flex gap-2";
     wrap.innerHTML = `
       <input class="flex-1 rounded bg-slate-800 border border-slate-700 text-slate-100 px-2 py-1" placeholder="Note" value="${escapeHTML(n||"")}"/>
-      <button type="button" class="rounded border border-red-900 text-red-300 hover:bg-red-950 px-2">×</button>
+      <button type="button" class="rounded border border-red-900 text-red-300 hover:bg-red-950 px-2">Ã—</button>
     `;
     wrap.lastElementChild.addEventListener("click", ()=> wrap.remove());
     notesBox.appendChild(wrap);
+  }
+
+  function cleanupSubscriptions() {
+    unsubscribeTokens.forEach((fn) => {
+      try { fn(); } catch { /* ignore */ }
+    });
+    unsubscribeTokens.length = 0;
   }
 
   // ---------------------------
@@ -567,9 +797,9 @@ export default function mountReports(el, props = {}) {
     const rep = {
       id: `R-${uid()}`,
       name: "Untitled report",
-      project: cfg.projects[0],
+      project: getDefaultProject(),
       sections: defaultSections(),
-      data: defaultData(cfg.projects[0]),
+      data: defaultData(getDefaultProject()),
       createdAt: nowISO(),
       updatedAt: nowISO(),
     };
@@ -765,7 +995,7 @@ export default function mountReports(el, props = {}) {
     const content = previewBox.innerHTML.replace(/^.*?<h3[^>]*>Preview<\/h3>/s, "");
     return `
       <!doctype html><html><head><meta charset="utf-8"/>
-      <title>${escapeHTML(rep.name)} — ${escapeHTML(rep.project)}</title>
+      <title>${escapeHTML(rep.name)} â€” ${escapeHTML(rep.project)}</title>
       <style>
         *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial}
         body{padding:18px;color:#0b1220}
@@ -778,8 +1008,8 @@ export default function mountReports(el, props = {}) {
         @page{margin:14mm}
       </style>
       </head><body>
-        <h1>${escapeHTML(rep.name)} — ${escapeHTML(rep.project)}</h1>
-        <div class="meta">Format: ${escapeHTML(state.format.toUpperCase())} • Sections: ${escapeHTML(enabledSections(rep).map(s=>s.label).join(", "))} • Generated: ${escapeHTML(human(payload.generatedAt))}</div>
+        <h1>${escapeHTML(rep.name)} â€” ${escapeHTML(rep.project)}</h1>
+        <div class="meta">Format: ${escapeHTML(state.format.toUpperCase())} â€¢ Sections: ${escapeHTML(enabledSections(rep).map(s=>s.label).join(", "))} â€¢ Generated: ${escapeHTML(human(payload.generatedAt))}</div>
         ${content}
       </body></html>`;
   }
@@ -797,14 +1027,58 @@ export default function mountReports(el, props = {}) {
   // Boot
   // ---------------------------
   (function init() {
-    // Cargar desde storage sin “llenar todo”; solo listado
+    // Cargar desde storage sin â€œllenar todoâ€; solo listado
     state.reports = persist.loadAll();
-    // UI lista
+    refreshDataSources();
+    syncProjectOptions();
+
+    const handleReportsChange = (payload = {}) => {
+      state.reports = payload.reports || persist.loadAll();
+      render();
+    };
+
+    const handleDataChange = () => {
+      refreshDataSources();
+      syncProjectOptions();
+      if (state.editMode) schedulePreview();
+    };
+
+    subscribeStoreEvent("reports:changed", handleReportsChange);
+    ["blueprint:summary", "materialLabor:changed", "suppliers:changed", "costControl:changed", "projects:changed"].forEach((event) => {
+      subscribeStoreEvent(event, handleDataChange);
+    });
+
     render();
 
-    // Eventos que dependen del DOM
     previewBox.addEventListener("click", () => {
-      // noop: espacio para futuros toggles
+      // placeholder for future interactions
     });
+
+    const beforeUnloadHandler = () => cleanupSubscriptions();
+    window.addEventListener("beforeunload", beforeUnloadHandler);
+    unsubscribeTokens.push(() => window.removeEventListener("beforeunload", beforeUnloadHandler));
   })();
+
+  return {
+    destroy() {
+      cleanupSubscriptions();
+      document.removeEventListener("ui:data:update", onBridgeData);
+    },
+    getData() {
+      return { reports: clone(state.reports) };
+    },
+    setData() {
+      // Los datos se sincronizan vía AppStore/dataHub.
+    }
+  };
 }
+
+
+
+
+
+
+
+
+
+

@@ -121,7 +121,7 @@ class LoginUI {
                     color: #1f2937;
                     font-weight: 500;
                   "
-                  placeholder="usuario@blueprint.com"
+                  placeholder="usuario@steeleye.com"
                   onfocus="this.style.borderColor='#4f46e5'; this.style.background='#ffffff'; this.style.boxShadow='0 0 0 3px rgba(79, 70, 229, 0.1)'"
                   onblur="this.style.borderColor=this.value?'#10b981':'#e5e7eb'; this.style.background='#ffffff'; this.style.boxShadow='none'"
                   oninput="this.style.borderColor=this.value?'#10b981':'#e5e7eb'"

@@ -1,40 +1,56 @@
+import "./store/appStore.js";
+
 /*
-  Blueprint Analyzer - Sistema con Autenticación
+  STEELEYE - Sistema con Autenticaci�n
   Loader de componentes + router + sistema de seguridad
-  Estructura esperada por convención:
+  Estructura esperada por convenci�n:
     /js/components/<nombre>/<nombre>.js
   Fallback aceptado:
     /js/components/<nombre>.js
 
   Extras:
-  - Sistema de autenticación integrado
+  - Sistema de autenticaci�n integrado
   - Control de permisos por componente
   - Aliases para mapear nombres a rutas personalizadas
 */
 
 const COMPONENT_ATTR = "component";
 const PROPS_ATTR = "props";
-const BASE_URL = new URL("./components/", import.meta.url); // robusto a rutas
+const BASE_URL = new URL("./components/", import.meta.url).href; // robusto a rutas
+
+// Mapeo de aliases a rutas de componentes
+const COMPONENT_ALIASES = {
+    "manualprinted": "manualprinted/manualprinted-container",
+    "cost-budget": "costestimation-budgetcontrol/cost-budget",
+    "asidebar": "asidebar/asidebar",
+    "dashboard": "dashboard/dashboard",
+    "project-management": "project-management/project-management",
+    "blueprint-analyzer": "blueprint-analyzer/blueprint-analyzer",
+    "material-labor": "material-labor/material-labor",
+    "reports": "reports/reports",
+    "settings": "settings/settings",
+    "suppliers": "suppliers/suppliers"
+};
 
 // Bus simple (opcional)
 export const ComponentBus = new EventTarget();
 window.ComponentBus = ComponentBus;
 
-// Sistema de autenticación global
+// Sistema de autenticaci�n global
 let authSystem = null;
 
-// Inicializar sistema de autenticación
+// Inicializar sistema de autenticaci�n
 async function initAuthSystem() {
     if (!window.AuthSystem) {
-        console.warn('AuthSystem no disponible, continuando sin autenticación');
+        console.warn('AuthSystem no disponible, continuando sin autenticaci�n');
         return false;
     }
     
     try {
         authSystem = new window.AuthSystem();
-        await new Promise(resolve => setTimeout(resolve, 100)); // Esperar inicialización
+        await new Promise(resolve => setTimeout(resolve, 100)); // Esperar inicializaci�n
         
-        console.log('✅ AuthSystem inicializado correctamente');
+        console.log('?? AuthSystem inicializado correctamente');
         
         // Hacer disponible globalmente
         window.authSystem = authSystem;
@@ -46,21 +62,51 @@ async function initAuthSystem() {
     }
 }
 
-/* ---------- Aliases opcionales ---------- */
-/*  Clave: nombre pasado a createComponent()
-    Valor: ruta relativa dentro de /components SIN .js
-    Ej: "cost-budget": "costestimation-budgetcontrol/cost-budget"
-*/
-const COMPONENT_ALIASES = {
-    "cost-budget": "costestimation-budgetcontrol/cost-budget",
-    // "settings": "settings/settings", // no hace falta, ya respeta la convención
-};
+/* ---------- Utils ---------- */
+function coerce(v) {
+    if (v === "true") return true;
+    if (v === "false") return false;
+    if (v === "null") return null;
+    if (v === "undefined") return undefined;
+    if (v === "") return "";
+    if (!Number.isNaN(Number(v))) return Number(v);
+    try { return JSON.parse(v); } catch { return v; }
+}
+
+function ensureArray(val) {
+    if (Array.isArray(val)) return val;
+    if (val == null) return [];
+    if (typeof val === "object") return Object.values(val);
+    return [val];
+}
+
+function safelyStringify(val) {
+    try { return JSON.stringify(val, null, 2); } catch { return "" + val; }
+}
+
+function loadModuleScript(name) {
+    const alias = COMPONENT_ALIASES[name];
+    const scriptName = alias || `${name}/${name}`;
+
+    const primary = new URL(`${scriptName}.js`, BASE_URL);
+    const fallback = new URL(`${name}.js`, BASE_URL);
+
+    return import(primary.href)
+        .then(mod => ({ module: mod, url: primary.href }))
+        .catch(err => {
+            console.warn(`Fall� cargar ${primary.href}. Intentando fallback...`, err);
+            return import(fallback.href)
+                .then(mod => ({ module: mod, url: fallback.href }));
+        });
+}
 
 /* ---------- Loader core ---------- */
 async function mountComponent(el) {
-    // Verificar autenticación antes de montar cualquier componente
+    if (!el) return;
+
+    // Verificar autenticaci�n antes de montar cualquier componente
     if (authSystem && !authSystem.isAuthenticated()) {
-        console.warn('Intento de acceso sin autenticación bloqueado');
+        console.warn('Intento de acceso sin autenticaci�n bloqueado');
         return;
     }
 
@@ -68,171 +114,89 @@ async function mountComponent(el) {
     if (!name) return;
     if (el.__component?.name === name && el.__component?.mounted) return;
 
-    // Verificar permisos específicos del componente si es necesario
+    // Verificar permisos espec�ficos del componente si es necesario
     if (authSystem && name === 'settings' && !authSystem.hasPermission('admin')) {
         el.innerHTML = '<div class="p-4 bg-red-100 text-red-700 rounded">Acceso denegado: Permisos insuficientes</div>';
         return;
     }
 
-    try { el.__component?.destroy?.(); } catch { }
+    // Limpiar instancia previa
+    try { el.__component?.destroy?.(); } catch (e) { console.warn("No se pudo destruir instancia previa", e); }
     el.__component = null;
 
     // Props desde data-attributes y/o JSON
     let jsonProps = {};
     const raw = el.dataset[PROPS_ATTR];
-    console.log(`🔧 Raw props for ${name}:`, raw); // Debug
-    if (raw) { try { jsonProps = JSON.parse(raw); console.log(`🔧 Parsed JSON props for ${name}:`, jsonProps); } catch (e) { console.error(`🔧 Error parsing JSON props for ${name}:`, e); } }
-    const other = {};
-    for (const [k, v] of Object.entries(el.dataset)) {
-        if (k === COMPONENT_ATTR || k === PROPS_ATTR) continue;
-        other[k] = coerce(v);
-    }
-    let props = { ...other, ...jsonProps };
-    console.log(`🔧 Final props for ${name}:`, props); // Debug
-
-    el.setAttribute("aria-busy", "true");
-    try {
-        // Import con fallback (carpeta/archivo → archivo plano) + aliases
-        const alias = COMPONENT_ALIASES[name];
-        const scriptName = alias || name;
-        
-        let url1 = new URL(`${scriptName}/${scriptName}.js`, BASE_URL);
-        let url2 = new URL(`${scriptName}.js`, BASE_URL);
-        
-        let module;
+    if (raw) {
         try {
-            module = await import(url1);
-        } catch {
-            module = await import(url2);
+            jsonProps = JSON.parse(raw);
+        } catch (error) {
+            console.warn(`Props JSON inv�lidos para ${name}:`, raw, error);
+        }
+    }
+
+    const otherProps = {};
+    for (const [key, value] of Object.entries(el.dataset)) {
+        if (key === COMPONENT_ATTR || key === PROPS_ATTR) continue;
+        otherProps[key] = coerce(value);
+    }
+
+    const props = { ...otherProps, ...jsonProps };
+    el.setAttribute("aria-busy", "true");
+
+    try {
+        const { module, url } = await loadModuleScript(name);
+        const create = module?.createComponent || module?.default;
+
+        if (!create) {
+            throw new Error(`El m�dulo ${url} no exporta createComponent ni default`);
         }
 
-        // Special handling for asidebar component to inject navigation data
-        if (name === 'asidebar') {
-            const currentUser = window.authSystem ? window.authSystem.getCurrentUser() : null;
-            const sidebarProps = {
-                brand: "Blueprint Analyzer v5.0",
-                profile: currentUser ? {
-                    name: currentUser.name,
-                    email: currentUser.email,
-                    initials: currentUser.name.split(' ').map(n => n[0]).join('').toUpperCase()
-                } : {
-                    name: 'User',
-                    email: 'user@blueprint.com',
-                    initials: 'U'
-                },
-                items: [
-                    {
-                        section: "Overview",
-                        items: [
-                            { label: "Dashboard", href: "#dashboard", icon: "dashboard" },
-                            { label: "Project Management", href: "#project-management", icon: "folder" }
-                        ]
-                    },
-                    {
-                        section: "Analysis", 
-                        items: [
-                            { label: "Blueprint Analyzer", href: "#blueprint-analyzer", icon: "search" },
-                            { label: "Material & Labor", href: "#material-labor", icon: "hammer" }
-                        ]
-                    },
-                    {
-                        section: "Financial",
-                        items: [
-                            { label: "Cost Estimation & Budget Control", href: "#cost-budget", icon: "dollar" }
-                        ]
-                    },
-                    {
-                        section: "Reporting",
-                        items: [
-                            { label: "Reports", href: "#reports", icon: "chart" },
-                            { label: "Suppliers", href: "#suppliers", icon: "truck" }
-                        ]
-                    }
-                ],
-                ...props // Merge with any existing props
-            };
-            console.log(`🚀 Injecting sidebar props:`, sidebarProps);
-            props = sidebarProps;
-        }
+        const instance = (await create(el, props)) || {};
 
-        // Buscar función mount (tu estructura) o createComponent (fallback)
-        let mountFn = module.default || module.mount || module.createComponent;
-        
-        if (!mountFn) {
-            throw new Error(`No se encontró función mount() o createComponent() en el módulo '${name}'`);
-        }
+        el.__component = {
+            name,
+            mounted: true,
+            destroy: instance.destroy || instance.unmount || (() => {}),
+            update: instance.update || instance.setProps || (() => {}),
+            getClient: () => instance
+        };
 
-        // Si es tu función mount(el, props), ejecutarla directamente
-        if (typeof mountFn === 'function') {
-            const result = await mountFn(el, props);
-            
-            // Guardar referencia para cleanup
-            el.__component = { 
-                name, 
-                mounted: true, 
-                destroy: result?.destroy || result?.unmount,
-                instance: result
-            };
-        } else {
-            throw new Error(`mount() no es una función en el módulo '${name}'`);
-        }
-
-        console.log(`✅ Componente '${name}' montado correctamente`);
-
+        console.log(`? Componente "${name}" montado desde ${url}`);
     } catch (error) {
-        console.error(`❌ Error cargando componente '${name}':`, error);
+        console.error(`Error montando componente "${name}"`, error);
         el.innerHTML = `
-            <div class="error-component p-4 bg-red-50 border border-red-200 rounded">
-                <h3 class="text-red-800 font-semibold">Error de Componente</h3>
-                <p class="text-red-600 text-sm mt-1">No se pudo cargar '${name}': ${error.message}</p>
-                <button onclick="this.parentElement.parentElement.setAttribute('data-component', '${name}'); location.reload()" 
-                        class="mt-2 px-3 py-1 bg-red-600 text-white rounded text-xs hover:bg-red-700">
-                    Reintentar
-                </button>
-            </div>
-        `;
+            <div class="p-4 bg-red-50 text-red-700 rounded">
+              Error cargando componente <b>${name}</b>.<br/>
+              <pre class="text-xs mt-2 bg-red-100 p-2 rounded">${safelyStringify(error.message || error)}</pre>
+            </div>`;
     } finally {
         el.removeAttribute("aria-busy");
     }
 }
 
-/* ---------- Utils ---------- */
-function coerce(val) {
-    if (val === "true") return true;
-    if (val === "false") return false;
-    if (val === "null") return null;
-    if (val === "undefined") return undefined;
-    if (/^\d+$/.test(val)) return parseInt(val, 10);
-    if (/^\d*\.\d+$/.test(val)) return parseFloat(val);
-    return val;
-}
-
 /* ---------- Observer ---------- */
-const observer = new MutationObserver(mutations => {
+const observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
-            if (node.nodeType === 1) { // Element
-                // El elemento agregado mismo
-                if (node.dataset?.[COMPONENT_ATTR]) {
-                    mountComponent(node);
-                }
-                // Sus hijos
-                for (const child of node.querySelectorAll(`[data-${COMPONENT_ATTR}]`)) {
-                    mountComponent(child);
-                }
+        mutation.addedNodes.forEach((node) => {
+            if (!(node instanceof HTMLElement)) return;
+            if (node.dataset?.[COMPONENT_ATTR]) mountComponent(node);
+            node.querySelectorAll?.(`[data-${COMPONENT_ATTR}]`).forEach((el) => mountComponent(el));
+        });
+        mutation.removedNodes.forEach((node) => {
+            if (!(node instanceof HTMLElement)) return;
+            if (node.dataset?.[COMPONENT_ATTR]) {
+                try { node.__component?.destroy?.(); } catch { }
             }
-        }
-        
-        // Cambios en atributos existentes
-        if (mutation.type === "attributes" && 
-            mutation.attributeName === `data-${COMPONENT_ATTR}`) {
-            mountComponent(mutation.target);
-        }
+        });
     }
 });
 
 /* ---------- Init ---------- */
 function startComponentSystem() {
+    if (window.__componentSystemStarted) return;
+    window.__componentSystemStarted = true;
+
     observer.observe(document.body, {
         childList: true,
         subtree: true,
@@ -240,11 +204,12 @@ function startComponentSystem() {
         attributeFilter: [`data-${COMPONENT_ATTR}`]
     });
 
-    // Componentes iniciales
     for (const el of document.querySelectorAll(`[data-${COMPONENT_ATTR}]`)) {
         mountComponent(el);
     }
 }
+
+window.startComponentSystem = startComponentSystem;
 
 /* ---------- Router simple ---------- */
 function renderRoute() {
@@ -254,15 +219,11 @@ function renderRoute() {
         return;
     }
     
-    // Get current component from data-component attribute
     const currentComponent = contentElement.dataset.component || 'dashboard';
-    console.log(`🔄 Rendering component: ${currentComponent}`);
-    
-    // Mount the component
+    console.log(`?? Renderizando componente: ${currentComponent}`);
     mountComponent(contentElement);
 }
 
-// Función para mostrar/ocultar aplicación (compatibilidad)
 function showApplication() {
     const mainApp = document.getElementById('main-app');
     if (mainApp) {
@@ -278,74 +239,66 @@ function hideApplication() {
     }
 }
 
-// Initialize system when page loads
-document.addEventListener('DOMContentLoaded', async () => {
-    console.log('🔐 Starting component system...');
-    
-    try {
-        // Inicializar autenticación si está disponible
-        const authInitialized = await initAuthSystem();
-        
-        if (authInitialized) {
-            console.log('✅ Authentication system initialized');
-        } else {
-            console.log('⚠️ Continuing without authentication system');
-        }
-        
-        // Configurar navegación
-        ComponentBus.addEventListener('navigate', (e) => {
-            const { component } = e.detail;
-            console.log(`🧭 Navegando a: ${component}`);
-            setTimeout(() => renderRoute(), 100);
-        });
+/* ---------- Navegaci�n ---------- */
+function setupNavigation() {
+    ComponentBus.addEventListener('navigate', (event) => {
+        const { component, props } = event.detail || {};
+        const contentElement = document.getElementById('app-content');
+        if (!contentElement || !component) return;
 
-        // Configurar navegación del sidebar
-        document.addEventListener('ui:navigate', (e) => {
-            const { href } = e.detail;
-            console.log(`🧭 Sidebar navigation to: ${href}`);
-            
-            // Extraer el componente del href (#component-name)
-            const component = href.replace('#', '');
-            
-            // Actualizar el contenido principal
-            const contentElement = document.getElementById('app-content');
-            if (contentElement && component) {
-                contentElement.dataset.component = component;
-                mountComponent(contentElement);
-            }
-        });
-        
-        // Inicializar el sistema de componentes
+        contentElement.dataset.component = component;
+        if (props) {
+            contentElement.dataset[PROPS_ATTR] = JSON.stringify(props);
+        }
+        renderRoute();
+    });
+
+    document.addEventListener('ui:navigate', (event) => {
+        const { href } = event.detail || {};
+        if (!href) return;
+
+        const target = href.replace('#', '');
+        const contentElement = document.getElementById('app-content');
+        if (contentElement) {
+            contentElement.dataset.component = target || 'dashboard';
+            renderRoute();
+        }
+    });
+}
+
+/* ---------- DOM Ready ---------- */
+document.addEventListener('DOMContentLoaded', async () => {
+    console.log('?? Inicializando sistema de componentes');
+    try {
+        const authReady = await initAuthSystem();
+        if (!authReady) {
+            console.log('?? Continuando sin sistema de autenticaci�n');
+        }
+
+        setupNavigation();
         startComponentSystem();
-        
-        // Inicializar el sidebar
+
         const sidebarContainer = document.getElementById('sidebar-container');
         if (sidebarContainer) {
             await mountComponent(sidebarContainer);
         }
-        
-        // Inicializar el routing
+
         renderRoute();
-        
-        console.log('🚀 Component system initialized');
-        
+        console.log('? Sistema de componentes inicializado');
     } catch (error) {
-        console.error('❌ Error during initialization:', error);
-        // In case of error, continue without authentication
+        console.error('Error durante la inicializaci�n:', error);
         startComponentSystem();
         renderRoute();
     }
 });
 
-// Interceptar navegación para verificar autenticación
 const originalPushState = history.pushState;
-history.pushState = function(...args) {
+history.pushState = function (...args) {
     if (authSystem && !authSystem.isAuthenticated()) {
-        console.warn('Navegación bloqueada: usuario no autenticado');
+        console.warn('Navegaci�n bloqueada: usuario no autenticado');
         return;
     }
     return originalPushState.apply(this, args);
 };
 
-// Exportar funciones principales
 export { mountComponent, renderRoute, showApplication, hideApplication };

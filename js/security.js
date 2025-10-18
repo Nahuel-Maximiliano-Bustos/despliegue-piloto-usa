@@ -1,4 +1,4 @@
-// Middleware de Seguridad - Blueprint Analyzer
+// Middleware de Seguridad - STEELEYE
 // Funciones adicionales de protección y monitoreo
 
 class SecurityMiddleware {

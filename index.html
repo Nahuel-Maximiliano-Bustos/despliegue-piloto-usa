@@ -7,9 +7,11 @@
     
     <!-- Tailwind CSS -->
     <link rel="stylesheet" href="./dist/output.css">
+    <!-- Font Awesome used by the UI for toolbar icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous">
     
-    <!-- PDF.js CDN -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <!-- PDF.js CDN removed from global scope. The CAD component carga su propia versión cuando la necesita para evitar conflictos y sobrecarga -->
+    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script> -->
     
     <!-- Meta tags de seguridad -->
     <meta name="robots" content="noindex, nofollow">
@@ -24,6 +26,73 @@
             background: #0f172a; 
             color: white;
         }
+
+        /* Theme variables and overrides (global) */
+        :root {
+            --bg: #0f172a; /* page background */
+            --panel: #111827; /* side/panel backgrounds */
+            --panel-2: #1f2937; /* alt panel */
+            --surface: #0b1220; /* main surface */
+            --accent: #4db1ff;
+            --muted: #9bb3c7;
+            --text: #e6eef6;
+            --border: rgba(12,17,23,0.6);
+            --btn: #364355;
+            --btn-h: #42526a;
+            --danger: #7a2b2b;
+            --modal: rgba(15,20,27,0.5);
+        }
+
+        /* Light theme overrides */
+        [data-theme="light"] {
+            --bg: #f6f8fa;
+            --panel: #ffffff;
+            --panel-2: #f3f4f6;
+            --surface: #ffffff;
+            --accent: #0ea5e9;
+            --muted: #556179;
+            --text: #0b1220;
+            --border: rgba(14, 18, 24, 0.08);
+            --btn: #eef2f6;
+            --btn-h: #e2e8f0;
+            --danger: #b91c1c;
+            --modal: rgba(255,255,255,0.8);
+        }
+
+        /* Generic elements mapped to variables so components get themed */
+        body { background: var(--bg); color: var(--text); }
+        .main-app-transition { transition: background 220ms ease, color 220ms ease; }
+
+        /* Ribbon / toolbar / groups */
+        .ribbon, .cad-ribbon, .ribbon .group, .cad-group { background: var(--panel); border-color: var(--border); }
+        .group h4, .cad-group h4 { color: var(--muted); }
+        .toolbar, .cad-toolbar { background: transparent }
+
+        /* Buttons */
+        .btn, .cad-btn { background: var(--btn); color: var(--text); border-color: var(--border); }
+        .btn:hover, .cad-btn:hover { background: var(--btn-h); }
+        .btn-danger, .cad-btn.danger { background: var(--danger); }
+
+        /* Panels and props */
+        .props, .cad-props, .panel, .modal, .cad-modal { background: var(--panel-2); color: var(--text); border-color: var(--border); }
+
+        /* Stage / canvas surface */
+        .stage, .cad-stage, .main, .cad-main { background: var(--surface); }
+
+        /* Status/footer */
+        .status, .cad-status { background: var(--panel); color: var(--text); border-top-color: var(--border); }
+
+        /* Modal backdrop */
+        .modal-bg, .cad-modalbg { background: var(--modal); }
+
+        /* Links */
+        a, .cad-link { color: var(--accent); }
+
+        /* Small things */
+        .muted, .cad-muted { color: var(--muted); }
+
+        /* Make sure FontAwesome icons color adapt */
+        i.fas, i.far, i.fab { color: currentColor }
         .bg-slate-900 { background-color: #0f172a; }
         .bg-slate-800 { background-color: #1e293b; }
         .text-white { color: white; }
@@ -506,6 +575,18 @@
     
     <!-- Tu sistema principal de componentes -->
     <script type="module" src="./js/main.js"></script>
+        <!-- Lucide icons (liberar desde CDN si no cargó por bundle) -->
+        <script>
+            // Evitar doble inserción
+            if (!window.lucideLoaded) {
+                const s = document.createElement('script');
+                s.src = 'https://unpkg.com/lucide@latest'; s.async = true;
+                s.onload = () => { window.lucideLoaded = true; try { if (window.lucide) window.renderLucideIcon = (name, size=16, cls='') => { try { const el = window.lucide.createElement(name, { class: cls || '' }); if (!el) return ''; if (typeof el === 'string') return el; try { if (size && el.setAttribute) { el.setAttribute('width', String(size)); el.setAttribute('height', String(size)); } return el.outerHTML || ''; } catch(e){ return el.outerHTML || ''; } } catch(e) { return ''; } } } catch(e){} };
+                document.head.appendChild(s);
+            }
+            // Helper seguro que devuelve SVG string o vacio
+            window.renderLucideIcon = window.renderLucideIcon || function(name, size=16, cls='') { try { if (window.lucide) { const el = window.lucide.createElement(name, { class: cls }); if (!el) return ''; if (typeof el === 'string') return el; if (size && el.setAttribute) { el.setAttribute('width', String(size)); el.setAttribute('height', String(size)); } return el.outerHTML || ''; } } catch(e){} return ''; };
+        </script>
     
     <!-- Script de inicialización y autenticación -->
     <script>
@@ -596,7 +677,8 @@
                                     section: "Analysis", 
                                     items: [
                                         { label: "Blueprint Analyzer", href: "#blueprint-analyzer", icon: "search" },
-                                        { label: "Material & Labor", href: "#material-labor", icon: "hammer" }
+                                        { label: "Material & Labor", href: "#material-labor", icon: "hammer" },
+                                        { label: "Manual Drawing", href: "#manualprinted", icon: "pencil" }
                                     ]
                                 },
                                 {
@@ -957,7 +1039,14 @@
             }, 300);
 
             // Initialize the application
-            initApp(); // NO DELAYS
+            // Preferir iniciar a través del sistema principal si ya está expuesto en window
+            if (window.startComponentSystem) {
+                // Si el sistema principal ya está cargado, use su inicializador
+                try { window.startComponentSystem(); initApp(); } catch (e) { console.error('Error starting component system:', e); initApp(); }
+            } else {
+                // Si no, ejecutar initApp que eventualmente importará el módulo central cuando sea necesario
+                initApp();
+            }
         });
 
         // Make available for component system

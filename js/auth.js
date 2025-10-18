@@ -24,35 +24,35 @@ class AuthSystem {
   async initializeUsers() {
     const usersData = [
       {
-        email: 'admin@blueprint.com',
+        email: 'admin@steeleye.com',
         password: 'Bp2025!Admin#',
         name: 'Administrador Principal',
         role: 'admin',
         permissions: ['all']
       },
       {
-        email: 'ing.rodriguez@blueprint.com',
+        email: 'ing.rodriguez@steeleye.com',
         password: 'StElEng$2025',
         name: 'Ing. Rodríguez',
         role: 'engineer',
         permissions: ['read', 'write', 'analyze']
       },
       {
-        email: 'arq.martinez@blueprint.com',
+        email: 'arq.martinez@steeleye.com',
         password: 'ArchDesign*24',
         name: 'Arq. Martínez',
         role: 'architect',
         permissions: ['read', 'write', 'design']
       },
       {
-        email: 'supervisor@blueprint.com',
+        email: 'supervisor@steeleye.com',
         password: 'TechSuper&25!',
         name: 'Supervisor Técnico',
         role: 'supervisor',
         permissions: ['read', 'write', 'supervise']
       },
       {
-        email: 'analista@blueprint.com',
+        email: 'analista@steeleye.com',
         password: 'ProjAnalyst#2025',
         name: 'Analista de Proyectos',
         role: 'analyst',

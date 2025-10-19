@@ -19,6 +19,8 @@
       // Estado principal
       this.state = { snap: false, unitName: 'u', unitPerPx: 1, showGrid: true, showRulers: true };
       this.scales = [];
+  this._bgData = null; // dataURL of background (image or rendered PDF page)
+  this._bgKey = null; // key used to associate shapes with this background
       this.LS_KEY = 'cadlite_state_pages_v1';
       this.shapesByPage = {};        // { key -> shapes[] }
       this.shapes = [];              // alias shapes current page
@@ -60,6 +62,16 @@
     $(sel) { return this.container.querySelector(sel); }
     $all(sel) { return Array.from(this.container.querySelectorAll(sel)); }
     uuid() { return Math.random().toString(36).slice(2, 9); }
+  // simple deterministic hash for strings (djb2 variant) -> base36
+  _hashStr(s) { try { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h) + s.charCodeAt(i); return (h >>> 0).toString(36); } catch (e) { return Math.random().toString(36).slice(2, 9); } }
+    // Simple debounce util (instance bound)
+    _debounce(fn, wait = 250) {
+      let timer = null;
+      return (...args) => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => { try { fn.apply(this, args); } catch (e) { console.error('debounced fn error', e); } }, wait);
+      };
+    }
     clamp(v, a, b) { return Math.min(b, Math.max(a, v)); }
     round(n, p = 2) { return Math.round(n * 10 ** p) / 10 ** p; }
     snapIf(v) { return this.state.snap ? Math.round(v / 10) * 10 : v; }
@@ -109,7 +121,61 @@
       if(!window.AppStore) console.warn('AppStore not found - manualprinted will fallback to localStorage');
     }
 
-    pageKey() { return this.currentDocType === 'pdf' ? `pdf_${this.pdfCurrent}` : 'global'; }
+    // Wrapper helpers that prefer debounced versions when available
+    _maybeSave() {
+      try {
+        if (this._debouncedSaveLocal) return this._debouncedSaveLocal();
+        return this._saveLocal();
+      } catch (e) { console.warn('maybeSave failed', e); }
+    }
+
+    _maybeEmitFamilies() {
+      try {
+        if (this._debouncedEmitFamiliesUpdate) return this._debouncedEmitFamiliesUpdate();
+        return this._emitFamiliesUpdate();
+      } catch (e) { console.warn('maybeEmitFamilies failed', e); }
+    }
+
+    // --- Plano Anotador (manualprinted.js)
+    // --- Envío de datos
+    // Compute families JSON grouped by icon and color for current page
+    _computeFamilies(){
+      try{
+        const key = this.pageKey();
+        const arr = (this.shapesByPage && this.shapesByPage[key]) ? this.shapesByPage[key] : (Array.isArray(this.shapes) ? this.shapes : []);
+        const map = {};
+        for(const s of arr){
+          if(!s || s.type !== 'icon') continue;
+          const icon = (s.icon || s.name || '').replace(/^custom:/,'') || 'icon';
+          const color = (s.color || '').toString().trim() || this._css('--accent','#4db1ff') || '#4db1ff';
+          const k = `${icon}|${color}`;
+          if(!map[k]) map[k] = { icon, color, count: 0 };
+          map[k].count += 1;
+        }
+        return map;
+      }catch(e){ console.error('computeFamilies error', e); return {}; }
+    }
+
+    // Persist families JSON to localStorage and broadcast updateMaterials event
+    _emitFamiliesUpdate(){
+      try{
+        const families = this._computeFamilies();
+        localStorage.setItem('familiesData', JSON.stringify(families));
+        window.dispatchEvent(new CustomEvent('updateMaterials', { detail: families }));
+      }catch(e){ console.error('emitFamiliesUpdate failed', e); }
+    }
+
+    // Clear persisted families and broadcast clearMaterials event
+    _clearFamiliesData(){
+      try{ localStorage.removeItem('familiesData'); window.dispatchEvent(new CustomEvent('clearMaterials')); }
+      catch(e){ console.warn('clearFamiliesData failed', e); }
+    }
+
+    pageKey() {
+      if (this.currentDocType === 'pdf') return `pdf_${this.pdfCurrent}`;
+      if (this.currentDocType === 'image' && this._bgKey) return this._bgKey;
+      return 'global';
+    }
     ensurePageArrays() {
       const key = this.pageKey();
       if (!this.shapesByPage[key]) this.shapesByPage[key] = [];
@@ -195,41 +261,42 @@
             <div class="cad-group">
               <h4>${this.opts.title}</h4>
               <div class="cad-toolbar">
-                <label class="cad-btn" title="Imagen"><span>Imagen</span><input class="cad-file" id="fileInput" type="file" accept="image/*"></label>
+                <label class="cad-btn" title="Image"><span>Image</span><input class="cad-file" id="fileInput" type="file" accept="image/*"></label>
                 <label class="cad-btn" title="PDF"><span>PDF</span><input class="cad-file" id="pdfInput" type="file" accept="application/pdf"></label>
-                <button id="btnPrevPage" class="cad-btn" title="Página anterior">◀</button>
+                <button id="btnPrevPage" class="cad-btn" title="Prev page">◀</button>
                 <span id="pdfPageIndicator" style="align-self:center;color:#9bb3c7;font-size:13px;margin:0 6px">—</span>
-                <button id="btnNextPage" class="cad-btn" title="Página siguiente">▶</button>
+                <button id="btnNextPage" class="cad-btn" title="Next page">▶</button>
 
-                <button id="btnExport" class="cad-btn" title="Exportar JSON">Export JSON</button>
-                <label class="cad-btn" title="Importar JSON">Import<input class="cad-file" id="jsonInput" type="file" accept="application/json"></label>
+                <button id="btnExport" class="cad-btn" title="Export JSON">Export JSON</button>
+                <label class="cad-btn" title="Import JSON">Import<input class="cad-file" id="jsonInput" type="file" accept="application/json"></label>
 
                 <button id="btnSnapshot" class="cad-btn" title="PNG 1:1">PNG</button>
-                <button id="btnSnapshotHi" class="cad-btn" title="PNG Hi-Res">PNG Hi-Res</button>
-                <button id="btnExportPdfPage" class="cad-btn" title="PDF Página">PDF Página</button>
-                <button id="btnExportPdfDoc" class="cad-btn" title="PDF Doc">PDF Doc</button>
+                <button id="btnSnapshotHi" class="cad-btn" title="PNG Hi-res">PNG Hi-res</button>
+                <button id="btnExportPdfPage" class="cad-btn" title="PDF Page">PDF Page</button>
+                <button id="btnExportPdfDoc" class="cad-btn" title="PDF Document">PDF Document</button>
 
-                <button id="btnClear" class="cad-btn danger" title="Limpiar">Limpiar</button>
+                <button id="btnClear" class="cad-btn danger" title="Clear">Clear</button>
+                <button id="btnClearBg" class="cad-btn" title="Remove background">Remove background</button>
               </div>
             </div>
 
             <div class="cad-group">
-                <h4>Herramientas</h4>
+                <h4>Tools</h4>
                 <div class="cad-toolbar" id="tools">
-                  <button data-tool="select" class="cad-btn active"><span class="cad-ic"><i class="fas fa-mouse-pointer"></i></span><span class="cad-label">Seleccionar</span></button>
+                  <button data-tool="select" class="cad-btn active"><span class="cad-ic"><i class="fas fa-mouse-pointer"></i></span><span class="cad-label">Select</span></button>
                   <button data-tool="pan" class="cad-btn"><span class="cad-ic"><i class="fas fa-hand-paper"></i></span><span class="cad-label">Pan</span></button>
-                  <button data-tool="rect" class="cad-btn"><span class="cad-ic"><i class="fas fa-square"></i></span><span class="cad-label">Rectángulo</span></button>
-                  <button data-tool="circle" class="cad-btn"><span class="cad-ic"><i class="fas fa-circle"></i></span><span class="cad-label">Círculo</span></button>
-                  <button data-tool="poly" class="cad-btn"><span class="cad-ic"><i class="fas fa-draw-polygon"></i></span><span class="cad-label">Polilínea</span></button>
-                  <button data-tool="text" class="cad-btn"><span class="cad-ic"><i class="fas fa-font"></i></span><span class="cad-label">Texto</span></button>
-                  <button data-tool="ruler" class="cad-btn"><span class="cad-ic"><i class="fas fa-ruler-horizontal"></i></span><span class="cad-label">Regla</span></button>
-                  <button data-tool="angle" class="cad-btn"><span class="cad-ic"><i class="fas fa-drafting-compass"></i></span><span class="cad-label">Ángulo</span></button>
-                  <button data-tool="icon" class="cad-btn"><span class="cad-ic"><i class="fas fa-stamp"></i></span><span class="cad-label">Icono</span></button>
+                  <button data-tool="rect" class="cad-btn"><span class="cad-ic"><i class="fas fa-square"></i></span><span class="cad-label">Rectangle</span></button>
+                  <button data-tool="circle" class="cad-btn"><span class="cad-ic"><i class="fas fa-circle"></i></span><span class="cad-label">Circle</span></button>
+                  <button data-tool="poly" class="cad-btn"><span class="cad-ic"><i class="fas fa-draw-polygon"></i></span><span class="cad-label">Polyline</span></button>
+                  <button data-tool="text" class="cad-btn"><span class="cad-ic"><i class="fas fa-font"></i></span><span class="cad-label">Text</span></button>
+                  <button data-tool="ruler" class="cad-btn"><span class="cad-ic"><i class="fas fa-ruler-horizontal"></i></span><span class="cad-label">Ruler</span></button>
+                  <button data-tool="angle" class="cad-btn"><span class="cad-ic"><i class="fas fa-drafting-compass"></i></span><span class="cad-label">Angle</span></button>
+                  <button data-tool="icon" class="cad-btn"><span class="cad-ic"><i class="fas fa-stamp"></i></span><span class="cad-label">Icon</span></button>
                 </div>
               </div>
 
             <div class="cad-group">
-              <h4>Iconos</h4>
+              <h4>Icons</h4>
               <div class="cad-toolbar">
                 <label class="cad-btn">
                   <select id="iconSelect" class="cad-inp">
@@ -253,39 +320,39 @@
                   </select>
                 </label>
                 <label class="cad-btn">
-                  <span>Tamaño</span>
+                  <span>Size</span>
                   <input id="iconSize" class="cad-inp" type="number" value="28" min="12" max="120" step="2" style="width:72px">
                 </label>
               </div>
             </div>
 
             <div class="cad-group">
-                <h4>Vistas</h4>
+                <h4>Views</h4>
                 <div class="cad-toolbar">
                   <button id="btnGrid" class="cad-btn"><span class="cad-ic"><i class="fas fa-border-all"></i></span><span class="cad-label">Grid</span></button>
-                  <button id="btnRulers" class="cad-btn"><span class="cad-ic"><i class="fas fa-ruler"></i></span><span class="cad-label">Reglas</span></button>
-                  <button id="btnScales" class="cad-btn"><span class="cad-ic"><i class="fas fa-balance-scale"></i></span><span class="cad-label">Escalas</span></button>
-                  <button id="btnZoomIn" class="cad-btn"><span class="cad-ic"><i class="fas fa-search-plus"></i></span><span class="cad-label">Zoom +</span></button>
-                  <button id="btnZoomOut" class="cad-btn"><span class="cad-ic"><i class="fas fa-search-minus"></i></span><span class="cad-label">Zoom −</span></button>
-                  <button id="btnResetView" class="cad-btn"><span class="cad-ic"><i class="fas fa-maximize"></i></span><span class="cad-label">Ajustar</span></button>
+                  <button id="btnRulers" class="cad-btn"><span class="cad-ic"><i class="fas fa-ruler"></i></span><span class="cad-label">Rulers</span></button>
+                  <button id="btnScales" class="cad-btn"><span class="cad-ic"><i class="fas fa-balance-scale"></i></span><span class="cad-label">Scales</span></button>
+                  <button id="btnZoomIn" class="cad-btn"><span class="cad-ic"><i class="fas fa-search-plus"></i></span><span class="cad-label">Zoom In</span></button>
+                  <button id="btnZoomOut" class="cad-btn"><span class="cad-ic"><i class="fas fa-search-minus"></i></span><span class="cad-label">Zoom Out</span></button>
+                  <button id="btnResetView" class="cad-btn"><span class="cad-ic"><i class="fas fa-maximize"></i></span><span class="cad-label">Fit</span></button>
                 </div>
               </div>
 
             <div class="cad-group">
-              <h4>Modificar</h4>
+              <h4>Edit</h4>
               <div class="cad-toolbar">
                 <button id="btnUndo" class="cad-btn"><span class="cad-ic">${this._iconHtml('corner-up-left',14)}</span><span class="cad-label">Undo</span></button>
                 <button id="btnRedo" class="cad-btn"><span class="cad-ic">${this._iconHtml('corner-up-right',14)}</span><span class="cad-label">Redo</span></button>
-                <button id="btnDelete" class="cad-btn danger"><span class="cad-ic">${this._iconHtml('trash-2',14)}</span><span class="cad-label">Eliminar</span></button>
-                <button id="btnTable" class="cad-btn"><span class="cad-ic">${this._iconHtml('table',14)}</span><span class="cad-label">Familias</span></button>
+                <button id="btnDelete" class="cad-btn danger"><span class="cad-ic">${this._iconHtml('trash-2',14)}</span><span class="cad-label">Delete</span></button>
+                <button id="btnTable" class="cad-btn"><span class="cad-ic">${this._iconHtml('table',14)}</span><span class="cad-label">Families</span></button>
               </div>
             </div>
 
             <div class="cad-group">
-              <h4>Estilo</h4>
+              <h4>Style</h4>
               <div class="cad-toolbar">
                 <label class="cad-btn"><span>Color</span> <input id="color" class="cad-inp" type="color" value="#4db1ff"></label>
-                <label class="cad-btn"><span>Stroke/Tamaño</span>
+                <label class="cad-btn"><span>Stroke/Size</span>
                   <input id="stroke" class="cad-inp" type="number" value="2" min="1" max="20" step="1" style="width:64px">
                 </label>
               </div>
@@ -293,34 +360,34 @@
           </div>
 
           <div class="cad-main">
-            <div class="cad-stage">
+              <div class="cad-stage">
               <div class="cad-rcorner" id="rulerCorner"></div>
               <canvas class="cad-rulert" id="rulerTop"></canvas>
               <canvas class="cad-rulerl" id="rulerLeft"></canvas>
-              <div class="cad-scale" id="scaleBar">Barra de escala</div>
+              <div class="cad-scale" id="scaleBar">Scale bar</div>
               <canvas class="cad-canvas" id="canvas"></canvas>
             </div>
             <aside class="cad-props">
-              <h3>Propiedades</h3>
+              <h3>Properties</h3>
               <div class="cad-grid">
                 <div class="cad-muted">ID</div><div id="p-id">—</div>
-                <div class="cad-muted">Tipo</div><div id="p-type">—</div>
-                <div class="cad-muted">Rótulo (opcional)</div><div><input id="p-name" class="cad-inp" type="text" placeholder="Rótulo"></div>
-                <div class="cad-muted">Mostrar rótulo</div><div><input id="p-showlabel" type="checkbox"></div>
+                <div class="cad-muted">Type</div><div id="p-type">—</div>
+                <div class="cad-muted">Label (optional)</div><div><input id="p-name" class="cad-inp" type="text" placeholder="Label"></div>
+                <div class="cad-muted">Show label</div><div><input id="p-showlabel" type="checkbox"></div>
                 <div class="cad-muted">Color</div><div><input id="p-color" class="cad-inp" type="color" value="#4db1ff"></div>
-                <div class="cad-muted">Grosor/Tamaño</div><div><input id="p-stroke" class="cad-inp" type="number" min="1" max="20" value="2" style="width:80px"> px</div>
-                <div class="cad-muted">Notas</div><div><textarea id="p-notes" rows="3" class="cad-inp" style="width:100%"></textarea></div>
-                <div class="cad-muted">Escala</div><div><span id="scaleLabel" class="cad-small">1 px = 1.00 u</span></div>
+                <div class="cad-muted">Thickness/Size</div><div><input id="p-stroke" class="cad-inp" type="number" min="1" max="20" value="2" style="width:80px"> px</div>
+                <div class="cad-muted">Notes</div><div><textarea id="p-notes" rows="3" class="cad-inp" style="width:100%"></textarea></div>
+                <div class="cad-muted">Scale</div><div><span id="scaleLabel" class="cad-small">1 px = 1.00 u</span></div>
               </div>
-              <p class="cad-small" style="margin-top:8px">Doble clic termina polilínea. Shift=cuadrado/círculo perfecto. Ángulo: vértice→brazo1→brazo2.</p>
+              <p class="cad-small" style="margin-top:8px">Double click ends polyline. Shift = perfect square/circle. Angle: vertex→arm1→arm2.</p>
             </aside>
           </div>
 
           <div class="cad-status">
-            <div>Herramienta: <span id="statusTool">Seleccionar</span> · Zoom: <span id="statusZoom">100%</span> · Unidades: <span id="unitLabel">u</span></div>
+            <div>Tool: <span id="statusTool">Select</span> · Zoom: <span id="statusZoom">100%</span> · Units: <span id="unitLabel">u</span></div>
             <div class="cad-right">
               <span>Cursor: <span id="statusXY">x:0, y:0</span></span>
-              <a id="helpLink" class="cad-link" href="#">Atajos</a>
+              <a id="helpLink" class="cad-link" href="#">Shortcuts</a>
             </div>
           </div>
 
@@ -328,26 +395,26 @@
           <div class="cad-modalbg" id="modalBg" aria-hidden="true">
             <div class="cad-modal" role="dialog" aria-modal="true">
               <header>
-                <h3>Familias (icono + color)</h3>
+                <h3>Families (icon + color)</h3>
                 <div>
                   <span id="tableCount" class="cad-small" style="margin-right:8px">—</span>
-                  <button class="cad-btn" id="btnToggleRows"><span id="toggleRowsText">Ver más</span></button>
-                  <button class="cad-btn" id="btnCopyJSON">Copiar JSON</button>
-                  <button class="cad-btn danger" id="btnCloseModal">Cerrar</button>
+                  <button class="cad-btn" id="btnToggleRows"><span id="toggleRowsText">Show more</span></button>
+                  <button class="cad-btn" id="btnCopyJSON">Copy JSON</button>
+                  <button class="cad-btn danger" id="btnCloseModal">Close</button>
                 </div>
               </header>
               <div class="content">
                 <table class="cad-table" id="table">
-                  <thead><tr><th>#</th><th>Icono</th><th>Color</th><th>Cantidad</th><th>Ir</th><th>Eliminar grupo</th></tr></thead>
+                  <thead><tr><th>#</th><th>Icon</th><th>Color</th><th>Count</th><th>Go</th><th>Delete group</th></tr></thead>
                   <tbody></tbody>
                 </table>
-                <h4 style="margin:14px 0 6px">Resumen</h4>
+                <h4 style="margin:14px 0 6px">Summary</h4>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
                   <div>
-                    <table class="cad-table" id="summaryByIcon"><thead><tr><th>Icono</th><th>Cantidad</th></tr></thead><tbody></tbody></table>
+                    <table class="cad-table" id="summaryByIcon"><thead><tr><th>Icon</th><th>Count</th></tr></thead><tbody></tbody></table>
                   </div>
                   <div>
-                    <table class="cad-table" id="summaryByIconColor"><thead><tr><th>Icono + Color</th><th>Cantidad</th></tr></thead><tbody></tbody></table>
+                    <table class="cad-table" id="summaryByIconColor"><thead><tr><th>Icon + Color</th><th>Count</th></tr></thead><tbody></tbody></table>
                   </div>
                 </div>
               </div>
@@ -358,10 +425,10 @@
           <div class="cad-modalbg" id="scalesModalBg" aria-hidden="true">
             <div class="cad-modal" role="dialog" aria-modal="true">
               <header>
-                <h3>Gestor de escalas</h3>
+                <h3>Scale manager</h3>
                 <div>
-                  <button class="cad-btn" id="btnAddScale">Agregar</button>
-                  <button class="cad-btn danger" id="btnCloseScales">Cerrar</button>
+                  <button class="cad-btn" id="btnAddScale">Add</button>
+                  <button class="cad-btn danger" id="btnCloseScales">Close</button>
                 </div>
               </header>
               <div class="content">
@@ -369,7 +436,7 @@
                   <thead><tr><th>Nombre</th><th>1 px = (unidades)</th><th>Unidad</th><th>Acciones</th></tr></thead>
                   <tbody></tbody>
                 </table>
-                <p class="cad-small" style="margin-top:8px">Tip: calibrá con dos puntos (U) y luego “Guardar como escala”.</p>
+                <p class="cad-small" style="margin-top:8px">Tip: calibrate with two points (U) and then “Save as scale”.</p>
               </div>
             </div>
           </div>
@@ -392,6 +459,12 @@
       await this._ensurePdfJs();
       await this._ensureJsPdf();
       await this._ensureAppStore();
+      // crear wrappers debounced para reducir escrituras frecuentes
+      try {
+        // debounced wrappers should call the actual implementations to avoid recursion
+        this._debouncedSaveLocal = this._debounce(() => this._saveLocal(), 300);
+        this._debouncedEmitFamiliesUpdate = this._debounce(() => this._emitFamiliesUpdate(), 300);
+      } catch (e) { /* fallbacks si algo falla */ }
       this._loadLocal();
       this.ensurePageArrays();
       this.$('#btnGrid').classList.toggle('active', this.state.showGrid);
@@ -402,11 +475,14 @@
       this.$('#statusZoom').textContent = '100%';
       this._updateCursor(false);
       this._render();
+  // Ensure we persist on full page unload as a safety net
+  try { window.addEventListener('beforeunload', () => { try { this._saveLocal(); } catch(e){} }); } catch(e) {}
       // subscribe to AppStore shape changes so other components can update this view
       try{
         if(window.AppStore && typeof window.AppStore.subscribe === 'function'){
           this._appStoreUnsub = window.AppStore.subscribe('shapes:changed', (payload)=>{
             try{
+              console.debug('[CADLite] AppStore shapes:changed payload=', payload);
               if(!payload || payload.pageKey !== this.pageKey()) return;
               if(this._suppressStore) return; // avoid reacting to our own writes
               this.shapesByPage[payload.pageKey] = payload.shapes || [];
@@ -421,24 +497,33 @@
     _saveLocal() {
       // persist to AppStore when available, otherwise fallback to localStorage
       try {
+        try { console.debug('[CADLite] _saveLocal: saving shapesByPage keys=', Object.keys(this.shapesByPage || {})); } catch(e){}
         const payload = {
           shapesByPage: this.shapesByPage,
           unitName: this.state.unitName,
           unitPerPx: this.state.unitPerPx,
           showGrid: this.state.showGrid,
           showRulers: this.state.showRulers,
-          scales: this.scales
+          scales: this.scales,
+          // persist background image (dataURL) so the plano stays when navigating
+          bgData: this._bgData || null,
+          bgKey: this._bgKey || null,
+          currentDocType: this.currentDocType || 'none',
+          pdfCurrent: this.pdfCurrent || 1,
+          pdfTotal: this.pdfTotal || 0
         };
         if (window.AppStore && typeof window.AppStore.setShapes === 'function'){
           // push per-page to store to minimize writes
           this._suppressStore = true;
           for(const k of Object.keys(this.shapesByPage)){
+            try { console.debug('[CADLite] _saveLocal: AppStore.setShapes key=', k, 'count=', (this.shapesByPage[k] || []).length); } catch(e){}
             window.AppStore.setShapes(k, this.shapesByPage[k] || []);
           }
           // meta
-          window.AppStore.setMeta('cad.meta', { unitName: this.state.unitName, unitPerPx: this.state.unitPerPx, showGrid: this.state.showGrid, showRulers: this.state.showRulers, scales: this.scales });
+          window.AppStore.setMeta('cad.meta', { unitName: this.state.unitName, unitPerPx: this.state.unitPerPx, showGrid: this.state.showGrid, showRulers: this.state.showRulers, scales: this.scales, bgData: this._bgData || null, bgKey: this._bgKey || null, currentDocType: this.currentDocType || 'none', pdfCurrent: this.pdfCurrent || 1, pdfTotal: this.pdfTotal || 0 });
           this._suppressStore = false;
         } else {
+          try { console.debug('[CADLite] _saveLocal: localStorage set key=', this.LS_KEY); } catch(e){}
           localStorage.setItem(this.LS_KEY, JSON.stringify(payload));
         }
         this._syncBlueprintSummary();
@@ -499,10 +584,7 @@
       try {
         // prefer AppStore
         if (window.AppStore && typeof window.AppStore.getShapes === 'function'){
-          // load shapes for current key if present
-          const key = this.pageKey();
-          const remote = window.AppStore.getShapes(key) || [];
-          if (Array.isArray(remote) && remote.length) { this.shapesByPage[key] = remote; }
+          // Attempt to restore meta first so we can load shapes tied to that background/pdf page
           const meta = window.AppStore.getMeta && window.AppStore.getMeta('cad.meta');
           if (meta) {
             if (meta.unitName) this.state.unitName = meta.unitName;
@@ -510,7 +592,45 @@
             if (typeof meta.showGrid === 'boolean') this.state.showGrid = meta.showGrid;
             if (typeof meta.showRulers === 'boolean') this.state.showRulers = meta.showRulers;
             if (Array.isArray(meta.scales)) this.scales = meta.scales;
+
+            // if AppStore has shapes saved for the exact bgKey, load them into shapesByPage
+            try {
+              if (meta.bgKey) {
+                const remoteBg = window.AppStore.getShapes(meta.bgKey) || [];
+                if (Array.isArray(remoteBg)) this.shapesByPage[meta.bgKey] = remoteBg;
+              }
+              // if meta indicates a pdf page, try to load shapes for that pdf page key
+              if (meta.currentDocType === 'pdf' && meta.pdfCurrent) {
+                const pdfKey = `pdf_${meta.pdfCurrent}`;
+                const remotePdf = window.AppStore.getShapes(pdfKey) || [];
+                if (Array.isArray(remotePdf)) this.shapesByPage[pdfKey] = remotePdf;
+              }
+            } catch (e) { /* ignore AppStore per-key read errors */ }
+
+            // restore background if present in meta (image or rendered PDF page)
+            if (meta.bgData) {
+              const img = new Image();
+              img.onload = () => {
+                this.bgImg = img;
+                this._bgData = meta.bgData;
+                this._bgKey = meta.bgKey || null;
+                this.currentDocType = meta.currentDocType || 'image';
+                this.pdfCurrent = meta.pdfCurrent || this.pdfCurrent;
+                this.pdfTotal = meta.pdfTotal || this.pdfTotal;
+                try { this.$('#pdfPageIndicator').textContent = this.currentDocType === 'pdf' ? `PDF: ${this.pdfCurrent}/${this.pdfTotal}` : 'Image'; } catch(e){}
+                // ensure arrays exist for the restored page key and render
+                this.ensurePageArrays(); this._select(null); this._render();
+              };
+              img.src = meta.bgData;
+            }
           }
+
+          // finally, try to load shapes for the runtime pageKey (could be global if no bg/meta yet)
+          try {
+            const key = this.pageKey();
+            const remote = window.AppStore.getShapes(key) || [];
+            if (Array.isArray(remote) && remote.length) { this.shapesByPage[key] = remote; }
+          } catch (e) { /* ignore */ }
           return;
         }
         const t = localStorage.getItem(this.LS_KEY); if (!t) return;
@@ -522,8 +642,46 @@
         if (typeof d.showGrid === 'boolean') this.state.showGrid = d.showGrid;
         if (typeof d.showRulers === 'boolean') this.state.showRulers = d.showRulers;
         if (Array.isArray(d.scales)) this.scales = d.scales;
+        // restore background image if persisted
+        if (d.bgData) {
+          const img = new Image();
+          img.onload = () => {
+            this.bgImg = img; this._bgData = d.bgData; this._bgKey = d.bgKey || null; this.currentDocType = d.currentDocType || 'image';
+            this.pdfCurrent = d.pdfCurrent || this.pdfCurrent; this.pdfTotal = d.pdfTotal || this.pdfTotal;
+            try { this.$('#pdfPageIndicator').textContent = this.currentDocType === 'pdf' ? `PDF: ${this.pdfCurrent}/${this.pdfTotal}` : 'Image'; } catch(e){}
+            this.ensurePageArrays(); this._select(null); this._render();
+          };
+          img.src = d.bgData;
+        }
       } catch (e) { console.warn('loadLocal failed', e); }
+      // final fallback: ensure current runtime page key has shapes array and is assigned to this.shapes
+      try {
+        const k = this.pageKey(); if (!this.shapesByPage[k]) this.shapesByPage[k] = [];
+        this.shapes = this.shapesByPage[k];
+      } catch(e){}
       try { this._syncBlueprintSummary(); } catch (err) { console.warn('Blueprint summary sync on load failed', err); }
+    }
+    // Public API: clear persisted background (image/pdf page)
+    clearBackground() {
+      try {
+        const oldKey = this._bgKey;
+        this.bgImg = null; this._bgData = null; this._bgKey = null; this.currentDocType = 'none'; this.pdfDoc = null; this.pdfCurrent = 1; this.pdfTotal = 0;
+        try { this.$('#pdfPageIndicator').textContent = '—'; } catch (e) {}
+        // update persisted storage
+        // remove persisted shapes associated to the old background key
+        try {
+          if (oldKey) {
+            if (window.AppStore && typeof window.AppStore.setShapes === 'function') {
+              window.AppStore.setShapes(oldKey, []);
+            }
+            if (localStorage && localStorage.getItem(this.LS_KEY)) {
+              const raw = localStorage.getItem(this.LS_KEY); const d = JSON.parse(raw || '{}'); if (d && d.shapesByPage && d.shapesByPage[oldKey]) { delete d.shapesByPage[oldKey]; localStorage.setItem(this.LS_KEY, JSON.stringify(d)); }
+            }
+          }
+        } catch(e){}
+        this._maybeSave();
+        this._render();
+      } catch (e) { console.warn('clearBackground failed', e); }
     }
     _pushUndo() {
       const key = this.pageKey();
@@ -743,7 +901,7 @@
     _setTool(t) {
       this.tool = t;
       this.$all('#tools .cad-btn[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === t));
-      this.$('#statusTool').textContent = ({ select: 'Seleccionar', pan: 'Pan', rect: 'Rectángulo', circle: 'Círculo', poly: 'Polilínea', text: 'Texto', ruler: 'Regla', angle: 'Ángulo', icon: 'Icono' })[t];
+  this.$('#statusTool').textContent = ({ select: 'Select', pan: 'Pan', rect: 'Rectangle', circle: 'Circle', poly: 'Polyline', text: 'Text', ruler: 'Ruler', angle: 'Angle', icon: 'Icon' })[t];
       this._updateCursor(false);
     }
 
@@ -769,23 +927,23 @@
           this.panLast = [e.clientX, e.clientY];
         } else if (this.tool === 'rect') {
           this._pushUndo(); const id = this.uuid();
-          this.activeShape = { id, type: 'rect', name: 'Rectángulo', x: world[0], y: world[1], w: 0, h: 0, color: $('#color').value, stroke: +$('#stroke').value, created: Date.now(), showLabel: false };
+          this.activeShape = { id, type: 'rect', name: 'Rectangle', x: world[0], y: world[1], w: 0, h: 0, color: $('#color').value, stroke: +$('#stroke').value, created: Date.now(), showLabel: false };
           this.shapes.push(this.activeShape); this._select(id);
         } else if (this.tool === 'circle') {
           this._pushUndo(); const id = this.uuid();
-          this.activeShape = { id, type: 'circle', name: 'Círculo', cx: world[0], cy: world[1], r: 0, color: $('#color').value, stroke: +$('#stroke').value, created: Date.now(), showLabel: false };
+          this.activeShape = { id, type: 'circle', name: 'Circle', cx: world[0], cy: world[1], r: 0, color: $('#color').value, stroke: +$('#stroke').value, created: Date.now(), showLabel: false };
           this.shapes.push(this.activeShape); this._select(id);
         } else if (this.tool === 'poly') {
           if (!this.polyWorking) {
             this._pushUndo(); const id = this.uuid();
-            this.polyWorking = this.activeShape = { id, type: 'poly', name: 'Polilínea', points: [{ x: world[0], y: world[1] }], color: $('#color').value, stroke: +$('#stroke').value, created: Date.now(), showLabel: false };
+            this.polyWorking = this.activeShape = { id, type: 'poly', name: 'Polyline', points: [{ x: world[0], y: world[1] }], color: $('#color').value, stroke: +$('#stroke').value, created: Date.now(), showLabel: false };
             this.shapes.push(this.activeShape); this._select(id);
           } else { this.polyWorking.points.push({ x: world[0], y: world[1] }); }
         } else if (this.tool === 'text') {
-          const text = prompt('Texto a insertar:', 'Etiqueta');
+          const text = prompt('Text to insert:', 'Label');
           if (text !== null) {
             this._pushUndo(); const id = this.uuid();
-            const s = { id, type: 'text', name: 'Texto', text, x: world[0], y: world[1], color: $('#color').value, stroke: +$('#stroke').value, created: Date.now(), showLabel: false };
+            const s = { id, type: 'text', name: 'Text', text, x: world[0], y: world[1], color: $('#color').value, stroke: +$('#stroke').value, created: Date.now(), showLabel: false };
             this.shapes.push(s); this._select(id);
           }
         } else if (this.tool === 'ruler') {
@@ -803,6 +961,8 @@
           const id = this.uuid(); const iconName = $('#iconSelect').value; const size = +$('#iconSize').value || 28;
           const s = { id, type: 'icon', name: iconName.slice(7), icon: iconName, x: world[0], y: world[1], size, color: $('#color').value, created: Date.now(), showLabel: false };
           this.shapes.push(s); this._select(id);
+          // notify materials consumer (debounced when available)
+          try{ this._maybeEmitFamilies(); }catch(e){ }
         }
 
         this._updateCursor(); this._render();
@@ -856,37 +1016,47 @@
           const s = { id, type: 'measure', kind: 'distance', p1: { ...this.measureTemp.p1 }, p2: { ...this.measureTemp.p2 }, color: '#ffd166', stroke: 2, created: Date.now() };
           this.shapes.push(s); this.measureTemp = null; this._select(id);
         }
-        this.activeShape = null; this._updateCursor(); this._saveLocal(); this._render();
+  this.activeShape = null; this._updateCursor(); this._maybeSave(); this._render();
       });
-      this.canvas.addEventListener('dblclick', () => { if (this.tool === 'poly' && this.polyWorking) { this.polyWorking = null; this.activeShape = null; this._render(); this._saveLocal(); } });
+  this.canvas.addEventListener('dblclick', () => { if (this.tool === 'poly' && this.polyWorking) { this.polyWorking = null; this.activeShape = null; this._render(); this._maybeSave(); } });
       this.canvas.addEventListener('wheel', (e) => { e.preventDefault(); const delta = e.deltaY > 0 ? 0.9 : 1.1; const mouse = [e.offsetX, e.offsetY]; const before = this._screenToWorld(mouse); this.view.scale = this.clamp(this.view.scale * delta, 0.2, 8); const after = this._screenToWorld(mouse); this.view.x += before[0] - after[0]; this.view.y += before[1] - after[1]; this.$('#statusZoom').textContent = `${Math.round(this.view.scale * 100)}%`; this._render(); }, { passive: false });
 
       // Propiedades
-      this.$('#p-name').addEventListener('input', e => { const s = this.shapes.find(x => x.id === this.selectedId); if (s) { s.name = e.target.value; this._saveLocal(); this._render(); } });
-      this.$('#p-showlabel').addEventListener('change', e => { const s = this.shapes.find(x => x.id === this.selectedId); if (s) { s.showLabel = e.target.checked; this._saveLocal(); this._render(); } });
-      this.$('#p-color').addEventListener('input', e => { const s = this.shapes.find(x => x.id === this.selectedId); if (s) { s.color = e.target.value; this._render(); this._saveLocal(); } });
-      this.$('#p-stroke').addEventListener('input', e => { const s = this.shapes.find(x => x.id === this.selectedId); if (s) { if (s.type === 'icon') { s.size = +e.target.value; } else { s.stroke = +e.target.value; } this._render(); this._saveLocal(); } });
-      this.$('#p-notes').addEventListener('input', e => { const s = this.shapes.find(x => x.id === this.selectedId); if (s) { s.notes = e.target.value; this._saveLocal(); } });
+  this.$('#p-name').addEventListener('input', e => { const s = this.shapes.find(x => x.id === this.selectedId); if (s) { s.name = e.target.value; this._maybeSave(); this._render(); } });
+  this.$('#p-showlabel').addEventListener('change', e => { const s = this.shapes.find(x => x.id === this.selectedId); if (s) { s.showLabel = e.target.checked; this._maybeSave(); this._render(); } });
+  this.$('#p-color').addEventListener('input', e => { const s = this.shapes.find(x => x.id === this.selectedId); if (s) { s.color = e.target.value; this._render(); this._maybeSave(); } });
+  this.$('#p-stroke').addEventListener('input', e => { const s = this.shapes.find(x => x.id === this.selectedId); if (s) { if (s.type === 'icon') { s.size = +e.target.value; } else { s.stroke = +e.target.value; } this._render(); this._maybeSave(); } });
+  this.$('#p-notes').addEventListener('input', e => { const s = this.shapes.find(x => x.id === this.selectedId); if (s) { s.notes = e.target.value; this._maybeSave(); } });
 
       // Archivo: imagen
       this.$('#fileInput').addEventListener('change', e => {
         const f = e.target.files[0]; if (!f) return;
-        const img = new Image(); img.onload = () => {
-          this.currentDocType = 'image'; this.pdfDoc = null; this.pdfTotal = 0;
-          this.$('#pdfPageIndicator').textContent = 'Imagen';
-          this.bgImg = img; this._fitTo(img.width, img.height);
-          this.ensurePageArrays(); this._select(null); this._render();
-        }; img.src = URL.createObjectURL(f);
+        // read file as dataURL so we can persist it
+        const reader = new FileReader();
+        reader.onload = () => {
+          const img = new Image();
+          img.onload = () => {
+            this.currentDocType = 'image'; this.pdfDoc = null; this.pdfTotal = 0;
+            this.$('#pdfPageIndicator').textContent = 'Image';
+            this.bgImg = img; this._bgData = reader.result; // persistable dataURL
+            // associate shapes with this specific background
+            try { this._bgKey = 'img_' + this._hashStr(this._bgData); } catch (e) { this._bgKey = 'img_' + this.uuid(); }
+            this._fitTo(img.width, img.height);
+            this.ensurePageArrays(); this._select(null); this._render(); this._maybeSave();
+          };
+          img.src = reader.result;
+        };
+        reader.readAsDataURL(f);
       });
 
       // Export PNG 1:1
       this.$('#btnSnapshot').addEventListener('click', () => {
-        const url = this.canvas.toDataURL('image/png'); const a = document.createElement('a'); a.href = url; a.download = 'captura.png'; a.click();
+        const url = this.canvas.toDataURL('image/png'); const a = document.createElement('a'); a.href = url; a.download = 'snapshot.png'; a.click();
       });
       // Export PNG hi-res
       this.$('#btnSnapshotHi').addEventListener('click', () => {
-        const s = parseFloat(prompt('Escala (ej: 2 = 2× resolución):', '2')) || 2;
-        this._exportPngHiRes(s, false, `captura@${s}x.png`);
+        const s = parseFloat(prompt('Scale (e.g. 2 = 2× resolution):', '2')) || 2;
+        this._exportPngHiRes(s, false, `snapshot@${s}x.png`);
       });
 
       // Export PDF
@@ -895,8 +1065,8 @@
 
       // Export/Import JSON
       this.$('#btnExport').addEventListener('click', () => {
-        const data = { createdAt: new Date().toISOString(), unitName: this.state.unitName, unitPerPx: this.state.unitPerPx, shapesByPage: this.shapesByPage, showGrid: this.state.showGrid, showRulers: this.state.showRulers, scales: this.scales };
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'anotaciones.json'; a.click();
+        const data = { createdAt: new Date().toISOString(), unitName: this.state.unitName, unitPerPx: this.state.unitPerPx, shapesByPage: this.shapesByPage, showGrid: this.state.showGrid, showRulers: this.state.showRulers, scales: this.scales, bgData: this._bgData || null, currentDocType: this.currentDocType || 'none', pdfCurrent: this.pdfCurrent || 1, pdfTotal: this.pdfTotal || 0 };
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'annotations.json'; a.click();
       });
       this.$('#jsonInput').addEventListener('change', (e) => {
         const f = e.target.files[0]; if (!f) return; const r = new FileReader();
@@ -910,16 +1080,28 @@
             if (typeof d.showGrid === 'boolean') this.state.showGrid = d.showGrid;
             if (typeof d.showRulers === 'boolean') this.state.showRulers = d.showRulers;
             if (Array.isArray(d.scales)) this.scales = d.scales;
+            // restore persisted background if present in imported JSON
+            if (d.bgData) {
+              const img = new Image(); img.onload = () => { this.bgImg = img; this._bgData = d.bgData; this.currentDocType = d.currentDocType || 'image'; this.pdfCurrent = d.pdfCurrent || this.pdfCurrent; this.pdfTotal = d.pdfTotal || this.pdfTotal; this._fitTo(img.width, img.height); this.ensurePageArrays(); this._render(); };
+              img.src = d.bgData;
+            }
             this.$('#scaleLabel').textContent = `1 px = ${this.round(this.state.unitPerPx, 4)} ${this.state.unitName}`;
-            this.ensurePageArrays(); this._render(); this._select(null); this._saveLocal();
-          } catch { alert('JSON inválido'); }
+            this.ensurePageArrays(); this._render(); this._select(null); this._maybeSave(); try{ this._maybeEmitFamilies(); }catch(e){}
+          } catch { alert('Invalid JSON'); }
         }; r.readAsText(f);
       });
 
       // Limpiar
-      this.$('#btnClear').addEventListener('click', () => {
-        if (!confirm('¿Borrar TODAS las anotaciones de la página actual?')) return;
-        this._pushUndo(); this.shapes.length = 0; this._select(null); this._render(); this._saveLocal();
+  this.$('#btnClear').addEventListener('click', () => {
+    if (!confirm('Delete ALL annotations on the current page?')) return;
+  this._pushUndo(); this.shapes.length = 0; this._select(null); this._render(); this._maybeSave();
+  try{ this._clearFamiliesData(); }catch(e){}
+  });
+
+      // Quitar plano (background)
+      this.$('#btnClearBg').addEventListener('click', () => {
+        if (!confirm('Remove the background (image/PDF) and its persistence?')) return;
+        this.clearBackground();
       });
 
       // Zoom botones
@@ -932,11 +1114,11 @@
       this.$('#btnTable').onclick = () => { this.TABLE_EXPANDED = false; this._fillFamiliesTable(); this._fillSummaries(); this.$('#modalBg').style.display = 'flex'; };
       this.$('#btnCloseModal').onclick = () => this.$('#modalBg').style.display = 'none';
       this.$('#modalBg').addEventListener('click', (e) => { if (e.target === this.$('#modalBg')) this.$('#modalBg').style.display = 'none'; });
-      this.$('#btnCopyJSON').onclick = () => { navigator.clipboard.writeText(JSON.stringify({ createdAt: new Date().toISOString(), unitName: this.state.unitName, unitPerPx: this.state.unitPerPx, shapesByPage: this.shapesByPage }, null, 2)); alert('JSON copiado ✅'); };
+  this.$('#btnCopyJSON').onclick = () => { navigator.clipboard.writeText(JSON.stringify({ createdAt: new Date().toISOString(), unitName: this.state.unitName, unitPerPx: this.state.unitPerPx, shapesByPage: this.shapesByPage }, null, 2)); alert('JSON copied ✅'); };
 
       // Grid/Reglas
-      this.$('#btnGrid').onclick = () => { this.state.showGrid = !this.state.showGrid; this.$('#btnGrid').classList.toggle('active', this.state.showGrid); this._saveLocal(); this._render(); };
-      this.$('#btnRulers').onclick = () => { this.state.showRulers = !this.state.showRulers; this.$('#btnRulers').classList.toggle('active', this.state.showRulers); this._saveLocal(); this._render(); };
+  this.$('#btnGrid').onclick = () => { this.state.showGrid = !this.state.showGrid; this.$('#btnGrid').classList.toggle('active', this.state.showGrid); this._maybeSave(); this._render(); };
+  this.$('#btnRulers').onclick = () => { this.state.showRulers = !this.state.showRulers; this.$('#btnRulers').classList.toggle('active', this.state.showRulers); this._maybeSave(); this._render(); };
 
       // Escalas
       this.$('#btnScales').onclick = () => { this._openScalesModal(); };
@@ -951,18 +1133,30 @@
         await this._loadPDF(URL.createObjectURL(f));
       });
       this.$('#btnNextPage').addEventListener('click', async () => {
-        if (!this.pdfDoc) return; if (this.pdfCurrent < this.pdfTotal) { this.pdfCurrent++; this.ensurePageArrays(); await this._renderPDFPage(this.pdfCurrent); this._select(null); this._render(); }
+        if (!this.pdfDoc) return;
+        if (this.pdfCurrent < this.pdfTotal) {
+          // save current page shapes before moving to next page
+          try { this._saveLocal(); } catch(e){}
+          this.pdfCurrent++;
+          this.ensurePageArrays(); await this._renderPDFPage(this.pdfCurrent); this._select(null); this._render();
+        }
       });
       this.$('#btnPrevPage').addEventListener('click', async () => {
-        if (!this.pdfDoc) return; if (this.pdfCurrent > 1) { this.pdfCurrent--; this.ensurePageArrays(); await this._renderPDFPage(this.pdfCurrent); this._select(null); this._render(); }
+        if (!this.pdfDoc) return;
+        if (this.pdfCurrent > 1) {
+          // save current page shapes before moving to previous page
+          try { this._saveLocal(); } catch(e){}
+          this.pdfCurrent--;
+          this.ensurePageArrays(); await this._renderPDFPage(this.pdfCurrent); this._select(null); this._render();
+        }
       });
 
       // Atajos
-      this.$('#helpLink').onclick = (e) => {
-        e.preventDefault(); alert(`V Seleccionar · H/Space Pan · R Rectángulo · C Círculo · P Polilínea (dblclick) · T Texto
-I Icono · M Regla · A Ángulo · G Grid · Shift+R Reglas · E Escalas · U Calibrar
-Tab Familias · Supr Eliminar · Ctrl+Z/Y Undo/Redo · Rueda: zoom`);
-      };
+  this.$('#helpLink').onclick = (e) => {
+    e.preventDefault(); alert(`V Select · H/Space Pan · R Rectangle · C Circle · P Polyline (dblclick) · T Text
+I Icon · M Ruler · A Angle · G Grid · Shift+R Rulers · E Scales · U Calibrate
+Tab Families · Del Delete · Ctrl+Z/Y Undo/Redo · Wheel: zoom`);
+  };
 
       window.addEventListener('keydown', (e) => {
         const k = e.key.toLowerCase(); this.shiftHeld = e.shiftKey;
@@ -1001,6 +1195,7 @@ Tab Familias · Supr Eliminar · Ctrl+Z/Y Undo/Redo · Rueda: zoom`);
           this._select(null);
           this._render();
           this._saveLocal();
+          try{ this._emitFamiliesUpdate(); }catch(e){}
           // Actualizar tablas/resúmenes si existen
           try { this._fillFamiliesTable(); this._fillSummaries(); } catch (e) { }
         } catch (err) {
@@ -1051,8 +1246,8 @@ Tab Familias · Supr Eliminar · Ctrl+Z/Y Undo/Redo · Rueda: zoom`);
           <td><span class="cad-tag">${f.icon}</span></td>
           <td><span class="cad-tag" style="border-color:${f.color};color:${f.color}">${f.color}</span></td>
           <td>${f.items.length}</td>
-          <td><button class="cad-btn" data-goto="${f.icon}|${f.color}">Ir</button></td>
-          <td><button class="cad-btn danger" data-del="${f.icon}|${f.color}">Eliminar</button></td>`;
+          <td><button class="cad-btn" data-goto="${f.icon}|${f.color}">Go</button></td>
+          <td><button class="cad-btn danger" data-del="${f.icon}|${f.color}">Delete</button></td>`;
         tbody.appendChild(tr);
       });
 
@@ -1073,6 +1268,7 @@ Tab Familias · Supr Eliminar · Ctrl+Z/Y Undo/Redo · Rueda: zoom`);
         this.shapes = this.shapes.filter(s => !(s.type === 'icon' && (s.icon || '').replace(/^custom:/, '') === icon && (s.color || '#4db1ff') === color));
         this.shapesByPage[this.pageKey()] = this.shapes;
         this._select(null); this._render(); this._saveLocal(); this._fillFamiliesTable(); this._fillSummaries();
+        try{ this._emitFamiliesUpdate(); }catch(e){}
       });
 
       this.$('#tableCount').textContent = `Mostrando ${shown.length} de ${fams.length} familias`;
@@ -1117,7 +1313,7 @@ Tab Familias · Supr Eliminar · Ctrl+Z/Y Undo/Redo · Rueda: zoom`);
       this.$('#scalesModalBg').style.display = 'flex';
     }
     _addOrEditScale(sc = null) {
-      const name = prompt('Nombre de la escala (ej: "1 px = 1 cm")', sc?.name || 'Personalizada')?.trim(); if (!name) return;
+      const name = prompt('Scale name (e.g. "1 px = 1 cm")', sc?.name || 'Custom')?.trim(); if (!name) return;
       const unitPerPx = parseFloat(prompt('Unidades por pixel (ej: 10 si 1 px = 10 mm)', sc?.unitPerPx ?? this.state.unitPerPx));
       if (!isFinite(unitPerPx) || unitPerPx <= 0) return alert('Valor inválido');
       const unitName = prompt('Unidad (mm, cm, m, u, etc.)', sc?.unitName || this.state.unitName || 'u')?.trim() || 'u';
@@ -1156,10 +1352,17 @@ Tab Familias · Supr Eliminar · Ctrl+Z/Y Undo/Redo · Rueda: zoom`);
       const page = await this.pdfDoc.getPage(n); const vp = page.getViewport({ scale: this.renderScale });
       const off = document.createElement('canvas'); off.width = vp.width; off.height = vp.height;
       await page.render({ canvasContext: off.getContext('2d'), viewport: vp }).promise;
+  // convert rendered canvas to image and persist the dataURL so the page stays when navigating
+  const dataUrl = off.toDataURL();
       const img = new Image();
-      await new Promise(res => { img.onload = res; img.src = off.toDataURL(); });
-      this.bgImg = img; this._fitTo(img.width, img.height);
+      await new Promise(res => { img.onload = res; img.src = dataUrl; });
+      this.bgImg = img; this._bgData = dataUrl; this._fitTo(img.width, img.height);
       this.$('#pdfPageIndicator').textContent = `PDF: ${this.pdfCurrent}/${this.pdfTotal}`;
+      // persist current PDF page as background so it remains when navigating away and back
+      this.currentDocType = 'pdf';
+  // associate shapes with this specific rendered PDF page
+  try { this._bgKey = 'pdfpage_' + this.pdfCurrent + '_' + this._hashStr(dataUrl); } catch (e) { this._bgKey = 'pdfpage_' + this.pdfCurrent + '_' + this.uuid(); }
+  this._maybeSave();
     }
 
     /* ================== ICONOS (SVG custom) ================== */

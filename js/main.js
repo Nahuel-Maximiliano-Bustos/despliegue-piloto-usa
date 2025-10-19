@@ -1,15 +1,15 @@
 import "./store/appStore.js";
 
 /*
-  STEELEYE - Sistema con Autenticación
+  STEELEYE - Sistema con Autenticaciï¿½n
   Loader de componentes + router + sistema de seguridad
-  Estructura esperada por convención:
+  Estructura esperada por convenciï¿½n:
     /js/components/<nombre>/<nombre>.js
   Fallback aceptado:
     /js/components/<nombre>.js
 
   Extras:
-  - Sistema de autenticación integrado
+  - Sistema de autenticaciï¿½n integrado
   - Control de permisos por componente
   - Aliases para mapear nombres a rutas personalizadas
 */
@@ -36,19 +36,19 @@ const COMPONENT_ALIASES = {
 export const ComponentBus = new EventTarget();
 window.ComponentBus = ComponentBus;
 
-// Sistema de autenticación global
+// Sistema de autenticaciï¿½n global
 let authSystem = null;
 
-// Inicializar sistema de autenticación
+// Inicializar sistema de autenticaciï¿½n
 async function initAuthSystem() {
     if (!window.AuthSystem) {
-        console.warn('AuthSystem no disponible, continuando sin autenticación');
+        console.warn('AuthSystem no disponible, continuando sin autenticaciï¿½n');
         return false;
     }
     
     try {
         authSystem = new window.AuthSystem();
-        await new Promise(resolve => setTimeout(resolve, 100)); // Esperar inicialización
+        await new Promise(resolve => setTimeout(resolve, 100)); // Esperar inicializaciï¿½n
         
         console.log('?? AuthSystem inicializado correctamente');
         
@@ -94,7 +94,7 @@ function loadModuleScript(name) {
     return import(primary.href)
         .then(mod => ({ module: mod, url: primary.href }))
         .catch(err => {
-            console.warn(`Falló cargar ${primary.href}. Intentando fallback...`, err);
+            console.warn(`Fallï¿½ cargar ${primary.href}. Intentando fallback...`, err);
             return import(fallback.href)
                 .then(mod => ({ module: mod, url: fallback.href }));
         });
@@ -104,9 +104,9 @@ function loadModuleScript(name) {
 async function mountComponent(el) {
     if (!el) return;
 
-    // Verificar autenticación antes de montar cualquier componente
+    // Verificar autenticaciï¿½n antes de montar cualquier componente
     if (authSystem && !authSystem.isAuthenticated()) {
-        console.warn('Intento de acceso sin autenticación bloqueado');
+        console.warn('Intento de acceso sin autenticaciï¿½n bloqueado');
         return;
     }
 
@@ -114,13 +114,30 @@ async function mountComponent(el) {
     if (!name) return;
     if (el.__component?.name === name && el.__component?.mounted) return;
 
-    // Verificar permisos específicos del componente si es necesario
+    // Verificar permisos especï¿½ficos del componente si es necesario
     if (authSystem && name === 'settings' && !authSystem.hasPermission('admin')) {
         el.innerHTML = '<div class="p-4 bg-red-100 text-red-700 rounded">Acceso denegado: Permisos insuficientes</div>';
         return;
     }
 
-    // Limpiar instancia previa
+    // Limpiar instancia previa: si el componente anterior expone beforeUnmount() lo esperamos
+    async function maybeCallBeforeUnmount(prev) {
+        if (!prev) return;
+        try {
+            const client = prev.getClient && prev.getClient();
+            if (client && typeof client.beforeUnmount === 'function') {
+                // Permitir que el componente haga operaciones asincrÃ³nicas (guardar estado, etc.)
+                await client.beforeUnmount();
+            }
+        } catch (err) {
+            console.warn('beforeUnmount failed', err);
+        }
+    }
+
+    try {
+        await maybeCallBeforeUnmount(el.__component);
+    } catch (e) { console.warn('Error waiting beforeUnmount', e); }
+
     try { el.__component?.destroy?.(); } catch (e) { console.warn("No se pudo destruir instancia previa", e); }
     el.__component = null;
 
@@ -131,7 +148,7 @@ async function mountComponent(el) {
         try {
             jsonProps = JSON.parse(raw);
         } catch (error) {
-            console.warn(`Props JSON inválidos para ${name}:`, raw, error);
+            console.warn(`Props JSON invï¿½lidos para ${name}:`, raw, error);
         }
     }
 
@@ -149,7 +166,7 @@ async function mountComponent(el) {
         const create = module?.createComponent || module?.default;
 
         if (!create) {
-            throw new Error(`El módulo ${url} no exporta createComponent ni default`);
+            throw new Error(`El mï¿½dulo ${url} no exporta createComponent ni default`);
         }
 
         const instance = (await create(el, props)) || {};
@@ -186,6 +203,14 @@ const observer = new MutationObserver((mutations) => {
         mutation.removedNodes.forEach((node) => {
             if (!(node instanceof HTMLElement)) return;
             if (node.dataset?.[COMPONENT_ATTR]) {
+                try {
+                    // attempt beforeUnmount if available
+                    const prev = node.__component;
+                    const client = prev?.getClient && prev.getClient();
+                    if (client && typeof client.beforeUnmount === 'function') {
+                        try { client.beforeUnmount(); } catch (e) { console.warn('beforeUnmount on removed node failed', e); }
+                    }
+                } catch (e) { /* ignore */ }
                 try { node.__component?.destroy?.(); } catch { }
             }
         });
@@ -239,12 +264,24 @@ function hideApplication() {
     }
 }
 
-/* ---------- Navegación ---------- */
+/* ---------- Navegaciï¿½n ---------- */
 function setupNavigation() {
     ComponentBus.addEventListener('navigate', (event) => {
         const { component, props } = event.detail || {};
         const contentElement = document.getElementById('app-content');
         if (!contentElement || !component) return;
+
+        // Before switching, attempt to flush any pending saves from the mounted component
+        try {
+            const prev = contentElement.__component;
+            const client = prev?.getClient && prev.getClient();
+            if (client) {
+                if (typeof client._maybeSave === 'function') client._maybeSave();
+                else if (typeof client._saveLocal === 'function') client._saveLocal();
+                if (typeof client._maybeEmitFamilies === 'function') client._maybeEmitFamilies();
+                else if (typeof client._emitFamiliesUpdate === 'function') client._emitFamiliesUpdate();
+            }
+        } catch (err) { console.warn('flush before navigate failed', err); }
 
         contentElement.dataset.component = component;
         if (props) {
@@ -272,7 +309,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
         const authReady = await initAuthSystem();
         if (!authReady) {
-            console.log('?? Continuando sin sistema de autenticación');
+            console.log('?? Continuando sin sistema de autenticaciï¿½n');
         }
 
         setupNavigation();
@@ -286,16 +323,29 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderRoute();
         console.log('? Sistema de componentes inicializado');
     } catch (error) {
-        console.error('Error durante la inicialización:', error);
+        console.error('Error durante la inicializaciï¿½n:', error);
         startComponentSystem();
         renderRoute();
     }
 });
 
+// Global flush on page unload to persist any in-memory state
+window.addEventListener('beforeunload', (e) => {
+    try {
+        const contentElement = document.getElementById('app-content');
+        const comp = contentElement? contentElement.__component : null;
+        const client = comp?.getClient && comp.getClient();
+        if (client) {
+            try { if (typeof client._maybeSave === 'function') client._maybeSave(); else if (typeof client._saveLocal === 'function') client._saveLocal(); } catch (er) {}
+            try { if (typeof client._maybeEmitFamilies === 'function') client._maybeEmitFamilies(); else if (typeof client._emitFamiliesUpdate === 'function') client._emitFamiliesUpdate(); } catch (er) {}
+        }
+    } catch (err) { /* ignore */ }
+});
+
 const originalPushState = history.pushState;
 history.pushState = function (...args) {
     if (authSystem && !authSystem.isAuthenticated()) {
-        console.warn('Navegación bloqueada: usuario no autenticado');
+        console.warn('Navegaciï¿½n bloqueada: usuario no autenticado');
         return;
     }
     return originalPushState.apply(this, args);

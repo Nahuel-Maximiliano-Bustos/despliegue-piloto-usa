@@ -4,7 +4,10 @@ import './manualprinted.js';
 // Función de montaje compatible con el sistema
 export default async function mount(container, props = {}) {
     let cadLite = null;
-    
+    // handlers en scope superior para permitir removals desde destroy()
+    let onWinResize = null;
+    let onSidebarToggle = null;
+    let adjustSize = null;
     try {
     // Limpiar el contenedor padre antes de montar (evita mounts duplicados/solapamientos)
     while (container.firstChild) container.removeChild(container.firstChild);
@@ -51,39 +54,39 @@ export default async function mount(container, props = {}) {
 
 
             // Helper: ajustar tamaño del cadContainer para que ocupe exactamente el rect visible del contenedor padre
-                    const adjustSize = () => {
-                        try {
-                            // Calcular ancho disponible restando el ancho del sidebar (si existe)
-                            const aside = document.querySelector('[data-aside]');
-                            const asideRect = aside ? aside.getBoundingClientRect() : { width: 0, left: 0 };
+            adjustSize = () => {
+                try {
+                    // Calcular ancho disponible restando el ancho del sidebar (si existe)
+                    const aside = document.querySelector('[data-aside]');
+                    const asideRect = aside ? aside.getBoundingClientRect() : { width: 0, left: 0 };
 
-                            // Obtener la posición superior de main-content para alinear verticalmente
-                            const mainEl = document.getElementById('main-content');
-                            const mainRect = mainEl ? mainEl.getBoundingClientRect() : container.getBoundingClientRect();
+                    // Obtener la posición superior de main-content para alinear verticalmente
+                    const mainEl = document.getElementById('main-content');
+                    const mainRect = mainEl ? mainEl.getBoundingClientRect() : container.getBoundingClientRect();
 
-                            const left = Math.max(0, Math.floor(asideRect.width));
-                            const top = Math.max(0, Math.floor(mainRect.top));
-                            const width = Math.max(100, Math.floor(window.innerWidth - left));
-                            const height = Math.max(100, Math.floor(window.innerHeight - top));
+                    const left = Math.max(0, Math.floor(asideRect.width));
+                    const top = Math.max(0, Math.floor(mainRect.top));
+                    const width = Math.max(100, Math.floor(window.innerWidth - left));
+                    const height = Math.max(100, Math.floor(window.innerHeight - top));
 
-                            // Posicionar fixed para garantizar que el área del componente no quede bajo el sidebar
-                            cadContainer.style.position = 'fixed';
-                            cadContainer.style.left = left + 'px';
-                            cadContainer.style.top = top + 'px';
-                            cadContainer.style.width = width + 'px';
-                            cadContainer.style.height = height + 'px';
-                            cadContainer.style.boxSizing = 'border-box';
+                    // Posicionar fixed para garantizar que el área del componente no quede bajo el sidebar
+                    cadContainer.style.position = 'fixed';
+                    cadContainer.style.left = left + 'px';
+                    cadContainer.style.top = top + 'px';
+                    cadContainer.style.width = width + 'px';
+                    cadContainer.style.height = height + 'px';
+                    cadContainer.style.boxSizing = 'border-box';
 
-                            // Forzar re-render en el canvas
-                            if (cadLite && typeof cadLite._resizeCanvas === 'function') {
-                                try { cadLite._resizeCanvas(); } catch (e) { /* no crítico */ }
-                            }
-                        } catch (e) { console.warn('adjustSize error', e); }
-                    };
+                    // Forzar re-render en el canvas
+                    if (cadLite && typeof cadLite._resizeCanvas === 'function') {
+                        try { cadLite._resizeCanvas(); } catch (e) { /* no crítico */ }
+                    }
+                } catch (e) { console.warn('adjustSize error', e); }
+            };
 
             // Escuchar cambios relevantes: ventana redimensionada y toggle del sidebar (la app emite 'ui:sidebar:toggle')
-            const onWinResize = () => adjustSize();
-            const onSidebarToggle = (e) => { setTimeout(adjustSize, 220); /* esperar la transición */ };
+            onWinResize = () => adjustSize();
+            onSidebarToggle = (e) => { setTimeout(adjustSize, 220); /* esperar la transición */ };
             window.addEventListener('resize', onWinResize);
             window.addEventListener('ui:sidebar:toggle', onSidebarToggle);
 
@@ -98,19 +101,38 @@ export default async function mount(container, props = {}) {
     // Función de destrucción
     function destroy() {
         if (cadLite) {
+            // Intentar guardar estado antes de desmontar
+            try {
+                if (typeof cadLite._saveLocal === 'function') cadLite._saveLocal();
+            } catch (e) { console.warn('Error saving CAD state before destroy', e); }
+            try {
+                if (typeof cadLite._emitFamiliesUpdate === 'function') cadLite._emitFamiliesUpdate();
+            } catch (e) { /* no crítico */ }
+
             // Limpiar el contenedor
             while (container.firstChild) {
                 container.removeChild(container.firstChild);
             }
             // quitar listeners añadidos
-            try { window.removeEventListener('resize', onWinResize); } catch (e) {}
-            try { window.removeEventListener('ui:sidebar:toggle', onSidebarToggle); } catch (e) {}
+            try { if (onWinResize) window.removeEventListener('resize', onWinResize); } catch (e) {}
+            try { if (onSidebarToggle) window.removeEventListener('ui:sidebar:toggle', onSidebarToggle); } catch (e) {}
             cadLite = null;
         }
     }
     
-    // Retornar objeto con método de destrucción
+    // beforeUnmount: convención pública opcional que puede devolver Promise para operaciones async (guardar, limpiar, etc.)
+    async function beforeUnmount() {
+        try {
+            if (cadLite) {
+                if (typeof cadLite._saveLocal === 'function') await cadLite._saveLocal();
+                if (typeof cadLite._emitFamiliesUpdate === 'function') await cadLite._emitFamiliesUpdate();
+            }
+        } catch (e) { console.warn('beforeUnmount error', e); }
+    }
+
+    // Retornar objeto con método de destrucción y beforeUnmount
     return {
-        destroy
+        destroy,
+        beforeUnmount
     };
 }

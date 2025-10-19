@@ -62,6 +62,65 @@ export default function mount(el, props = {}) {
     }
   }
 
+  // --- Material & Labor (material-labor.js)
+  // --- Escucha global y actualización de tabla
+  // Single window listeners for updateMaterials and clearMaterials
+  function _applyFamiliesJSON(familiesJSON){
+    try{
+      // familiesJSON = { "icon|#color": { icon, color, count } }
+      const incomingKeys = new Set(Object.keys(familiesJSON || {}));
+      // Map current materials by key name|color
+      const currentMap = new Map();
+      state.materials.forEach((m, idx)=>{
+        const key = `${(m.name||'').toString().trim()}|${(m.unitColor||m.color||'').toString().trim()}`;
+        currentMap.set(key, { m, idx });
+      });
+
+      // Apply or update
+      for(const k of Object.keys(familiesJSON || {})){
+        const entry = familiesJSON[k];
+        const icon = String(entry.icon || '').trim();
+        const color = String(entry.color || '').trim();
+        const count = Number(entry.count) || 0;
+        const key = `${icon}|${color}`;
+        if(currentMap.has(key)){
+          const { m } = currentMap.get(key);
+          m.qty = count;
+        } else {
+          // create new material entry
+          state.materials.push({ name: icon, qty: count, unit: 0, unitColor: color });
+        }
+      }
+
+      // Remove materials that are no longer present in familiesJSON (by name|color)
+      for(let i = state.materials.length - 1; i >= 0; i--){
+        const m = state.materials[i];
+        const key = `${(m.name||'').toString().trim()}|${(m.unitColor||m.color||'').toString().trim()}`;
+        if(!incomingKeys.has(key)){
+          state.materials.splice(i,1);
+        }
+      }
+
+      save(); render();
+    }catch(e){ console.error('applyFamiliesJSON failed', e); }
+  }
+
+  function _onUpdateMaterials(ev){ if(!ev || !ev.detail) return; _applyFamiliesJSON(ev.detail); }
+  function _onClearMaterials(ev){ state.materials.length = 0; save(); render(); }
+
+  // attach once
+  if(!window._ml_updateMaterials_attached){
+    window.addEventListener('updateMaterials', _onUpdateMaterials);
+    window.addEventListener('clearMaterials', _onClearMaterials);
+    window._ml_updateMaterials_attached = true;
+  }
+
+  // On load: preload familiesData stored by manualprinted if present
+  try{
+    const raw = localStorage.getItem('familiesData');
+    if(raw){ const js = JSON.parse(raw); if(js && typeof js === 'object') _applyFamiliesJSON(js); }
+  }catch(e){ /* ignore parse errors */ }
+
   // --------- Estilos (dark pro) ---------
   injectOnce("ml-css", `
     :root{

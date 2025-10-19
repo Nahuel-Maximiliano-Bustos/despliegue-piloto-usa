@@ -1,7 +1,7 @@
 {
   "name": "steeleye",
   "version": "1.0.0",
-  "description": "Actúa como un dev frontend senior. Generá un proyecto solo frontend (sin backend) que replica exactamente las pantallas adjuntas y funciona: el usuario sube un PDF y un Excel de piezas, el sistema detecta, cuenta y marca coincidencias por página con highlights de color, muestra resumen y filtros, y permite exportar CSV/JSON. Usá Tailwind + JS ESM + PDF.js + Tesseract.js + SheetJS, todo por CDN. No agregues frameworks ni bundlers.",
+  "description": "STEELEYE - Advanced project management system with intelligent blueprint analysis and cost estimation. Frontend-only system that uploads PDFs and Excel files, detects pieces, counts and marks matches by page with color highlights, shows summary and filters, and allows CSV/JSON export.",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -16,5 +16,8 @@
     "autoprefixer": "^10.4.21",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.1"
+  },
+  "dependencies": {
+    "lucide": "^0.545.0"
   }
 }

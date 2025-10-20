@@ -112,6 +112,11 @@ export default function mount(el, props = {}) {
 
   // Keyboard: Ctrl/Cmd+B
   const onKey = (e) => {
+    // Only act when focus or event target is inside this aside element
+    try{
+      const active = document.activeElement;
+      if (!(el.contains(active) || el.contains(e.target))) return;
+    }catch(err){ return; }
     const isMac = navigator.platform.toUpperCase().includes("MAC");
     if ((isMac ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === "b") {
       e.preventDefault();

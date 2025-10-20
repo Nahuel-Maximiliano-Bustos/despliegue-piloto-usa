@@ -70,8 +70,17 @@ class SecurityMiddleware {
       }
     }, 500);
 
-    // Bloquear teclas de acceso rápido
+    // Bloquear teclas de acceso rápido en la mayoría de la interfaz, pero no cuando el foco
+    // está dentro de inputs, textareas, o si el evento se origina desde un iframe (ej. visor PDF).
     document.addEventListener('keydown', (e) => {
+      try{
+        const t = e.target;
+        const tag = t && t.tagName ? t.tagName.toUpperCase() : '';
+        const isInteractive = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t && t.isContentEditable;
+        // If event came from inside an iframe or an embedded object, skip blocking
+        const isInIframe = (() => { try { return !!(t && (t.nodeName === 'IFRAME' || t.closest && t.closest('iframe'))); } catch (err) { return false; } })();
+        if (isInteractive || isInIframe) return;
+      }catch(err){ /* ignore */ }
       // F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U
       if (e.key === 'F12' || 
           (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J')) ||

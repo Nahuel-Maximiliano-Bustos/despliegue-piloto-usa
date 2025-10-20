@@ -253,6 +253,11 @@ export default function mount(el, props = {}) {
   });
   // atajo
   const onKey = (e) => {
+    // Only handle dashboard shortcuts if focus/target is inside this component
+    try{
+      const active = document.activeElement;
+      if (!(el.contains(active) || el.contains(e.target))) return;
+    }catch(err){ return; }
     const isMac = navigator.platform.toUpperCase().includes("MAC");
     if ((isMac ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === "f") {
       e.preventDefault(); searchInput.focus();

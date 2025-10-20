@@ -5,6 +5,9 @@
  */
 (function () {
 
+  // Cache PDF documents in-memory so we can restore them after remounts without refetching.
+  const PDF_CACHE = new Map();
+
   class CADLite {
     constructor(container, options = {}) {
       if (!container) throw new Error('CADLite: container requerido.');
@@ -43,6 +46,7 @@
       // Documento
       this.currentDocType = 'none'; // 'pdf' | 'image' | 'none'
       this.pdfDoc = null; this.pdfCurrent = 1; this.pdfTotal = 0; this.renderScale = 1.5;
+      this.pdfFingerprint = null;
       this.bgImg = null;
 
       // Canvas/vistas
@@ -143,14 +147,24 @@
       try{
         const key = this.pageKey();
         const arr = (this.shapesByPage && this.shapesByPage[key]) ? this.shapesByPage[key] : (Array.isArray(this.shapes) ? this.shapes : []);
+        // load any persisted familiesData so we can include user-provided annotations
+        let persisted = {};
+        try { persisted = JSON.parse(localStorage.getItem('familiesData') || '{}') || {}; } catch(e) { persisted = {}; }
         const map = {};
         for(const s of arr){
           if(!s || s.type !== 'icon') continue;
           const icon = (s.icon || s.name || '').replace(/^custom:/,'') || 'icon';
           const color = (s.color || '').toString().trim() || this._css('--accent','#4db1ff') || '#4db1ff';
           const k = `${icon}|${color}`;
-          if(!map[k]) map[k] = { icon, color, count: 0 };
+          if(!map[k]) map[k] = { icon, color, count: 0, annotation: '' };
           map[k].count += 1;
+          // include any saved annotation or unit data for this family
+          try {
+            if (persisted && persisted[k]){
+              if (typeof persisted[k].annotation === 'string') map[k].annotation = persisted[k].annotation;
+              if (persisted[k].unitCost != null) map[k].unitCost = persisted[k].unitCost;
+            }
+          } catch(e){}
         }
         return map;
       }catch(e){ console.error('computeFamilies error', e); return {}; }
@@ -160,6 +174,7 @@
     _emitFamiliesUpdate(){
       try{
         const families = this._computeFamilies();
+        // Persist only the keys present (this will include annotations already merged by _computeFamilies)
         localStorage.setItem('familiesData', JSON.stringify(families));
         window.dispatchEvent(new CustomEvent('updateMaterials', { detail: families }));
       }catch(e){ console.error('emitFamiliesUpdate failed', e); }
@@ -405,7 +420,7 @@
               </header>
               <div class="content">
                 <table class="cad-table" id="table">
-                  <thead><tr><th>#</th><th>Icon</th><th>Color</th><th>Count</th><th>Go</th><th>Delete group</th></tr></thead>
+                  <thead><tr><th>#</th><th>Icon</th><th>Color</th><th>Annotation</th><th>Count</th><th>Go</th><th>Delete group</th></tr></thead>
                   <tbody></tbody>
                 </table>
                 <h4 style="margin:14px 0 6px">Summary</h4>
@@ -446,6 +461,84 @@
       // Cache de nodos importantes
       this.canvas = this.$('#canvas');
       this.ctx = this.canvas.getContext('2d', { alpha: true });
+  // make canvas focusable so it can receive keyboard events
+  try{ this.canvas.tabIndex = 0; }catch(e){}
+  // focus canvas initially so keyboard navigation works
+  try{ if (this.canvas && typeof this.canvas.focus === 'function') this.canvas.focus(); }catch(e){}
+  // When the document or app navigation returns to this view, ensure the canvas regains focus
+  try{
+    this._visHandler = () => {
+      try{
+        if (document.visibilityState === 'visible'){
+          const r = this.container.getBoundingClientRect();
+          const style = window.getComputedStyle(this.container);
+          if (r.width > 0 && r.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'){
+            // try focusing embedded PDF iframe first (if present), otherwise focus canvas
+            try{
+              const iframe = this.container.querySelector('iframe');
+              if (iframe && typeof iframe.focus === 'function') { iframe.focus(); return; }
+            }catch(e){}
+            if (this.canvas && typeof this.canvas.focus === 'function') this.canvas.focus();
+          }
+        }
+      }catch(e){}
+    };
+    document.addEventListener('visibilitychange', this._visHandler);
+
+    this._uiNavigateHandler = (e) => {
+      try{
+        const r = this.container.getBoundingClientRect();
+        const style = window.getComputedStyle(this.container);
+        if (r.width > 0 && r.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'){
+          try{
+            const iframe = this.container.querySelector('iframe');
+            if (iframe && typeof iframe.focus === 'function') { iframe.focus(); return; }
+          }catch(e){}
+          if (this.canvas && typeof this.canvas.focus === 'function') this.canvas.focus();
+        }
+      }catch(e){}
+    };
+    window.addEventListener('ui:navigate', this._uiNavigateHandler);
+  }catch(e){}
+
+  // Diagnostic: optional global preventDefault logger (enable by setting localStorage.debug_key_blocker = '1')
+  try{
+    if (!window.__preventDefaultWrapped) {
+      const orig = Event.prototype.preventDefault;
+      Event.prototype.preventDefault = function(){
+        try{
+          if (localStorage && localStorage.getItem && localStorage.getItem('debug_key_blocker') === '1'){
+            try{
+              const ev = this;
+              if (ev && ev.type === 'keydown'){
+                const stack = new Error().stack || '';
+                console.warn('[DEBUG preventDefault] key=', ev.key, 'target=', ev.target, 'activeElement=', document.activeElement, '\nstack:', stack.split('\n').slice(0,6).join('\n'));
+              }
+            }catch(e){}
+          }
+        }catch(e){}
+        return orig.apply(this, arguments);
+      };
+      window.__preventDefaultWrapped = true;
+    }
+  }catch(e){}
+
+  // Add lightweight diagnostic info in our local keydown handler to show target/focus when arrows/page are pressed
+  try{
+    const _origKeydown = window._manualprinted_dbg_keydown;
+    if (!window._manualprinted_dbg_keydown) {
+      window._manualprinted_dbg_keydown = (e) => {
+        try{
+          if (['arrowright','arrowleft','pagedown','pageup'].includes(e.key.toLowerCase())){
+            if (localStorage && localStorage.getItem && localStorage.getItem('debug_key_blocker') === '1'){
+              console.debug('[manualprinted keydown] key=', e.key, 'target=', e.target, 'activeElement=', document.activeElement, 'defaultPrevented=', e.defaultPrevented);
+            }
+          }
+        }catch(err){}
+      };
+      window.addEventListener('keydown', window._manualprinted_dbg_keydown, true);
+    }
+  }catch(e){}
       this.rulerTop = this.$('#rulerTop'); this.rtx = this.rulerTop.getContext('2d');
       this.rulerLeft = this.$('#rulerLeft'); this.rly = this.rulerLeft.getContext('2d');
       this.scaleBar = this.$('#scaleBar');
@@ -507,6 +600,9 @@
           scales: this.scales,
           // persist background image (dataURL) so the plano stays when navigating
           bgData: this._bgData || null,
+          // persist full PDF data (dataURL) if loaded from file so we can restore the whole document
+          pdfData: this._pdfData || null,
+          pdfFingerprint: this.pdfFingerprint || null,
           bgKey: this._bgKey || null,
           currentDocType: this.currentDocType || 'none',
           pdfCurrent: this.pdfCurrent || 1,
@@ -520,7 +616,7 @@
             window.AppStore.setShapes(k, this.shapesByPage[k] || []);
           }
           // meta
-          window.AppStore.setMeta('cad.meta', { unitName: this.state.unitName, unitPerPx: this.state.unitPerPx, showGrid: this.state.showGrid, showRulers: this.state.showRulers, scales: this.scales, bgData: this._bgData || null, bgKey: this._bgKey || null, currentDocType: this.currentDocType || 'none', pdfCurrent: this.pdfCurrent || 1, pdfTotal: this.pdfTotal || 0 });
+          window.AppStore.setMeta('cad.meta', { unitName: this.state.unitName, unitPerPx: this.state.unitPerPx, showGrid: this.state.showGrid, showRulers: this.state.showRulers, scales: this.scales, bgData: this._bgData || null, pdfData: this._pdfData || null, pdfFingerprint: this.pdfFingerprint || null, bgKey: this._bgKey || null, currentDocType: this.currentDocType || 'none', pdfCurrent: this.pdfCurrent || 1, pdfTotal: this.pdfTotal || 0 });
           this._suppressStore = false;
         } else {
           try { console.debug('[CADLite] _saveLocal: localStorage set key=', this.LS_KEY); } catch(e){}
@@ -592,6 +688,7 @@
             if (typeof meta.showGrid === 'boolean') this.state.showGrid = meta.showGrid;
             if (typeof meta.showRulers === 'boolean') this.state.showRulers = meta.showRulers;
             if (Array.isArray(meta.scales)) this.scales = meta.scales;
+            if (meta.pdfFingerprint) this.pdfFingerprint = meta.pdfFingerprint;
 
             // if AppStore has shapes saved for the exact bgKey, load them into shapesByPage
             try {
@@ -610,13 +707,50 @@
             // restore background if present in meta (image or rendered PDF page)
             if (meta.bgData) {
               const img = new Image();
-              img.onload = () => {
+              img.onload = async () => {
                 this.bgImg = img;
                 this._bgData = meta.bgData;
                 this._bgKey = meta.bgKey || null;
                 this.currentDocType = meta.currentDocType || 'image';
-                this.pdfCurrent = meta.pdfCurrent || this.pdfCurrent;
+                const restoredPage = meta.pdfCurrent || this.pdfCurrent;
+                this.pdfCurrent = restoredPage || this.pdfCurrent;
                 this.pdfTotal = meta.pdfTotal || this.pdfTotal;
+                this.pdfFingerprint = meta.pdfFingerprint || this.pdfFingerprint;
+
+                let pdfReady = false;
+                if (this.currentDocType === 'pdf') {
+                  if (meta.pdfData) {
+                    try {
+                      this._pdfData = meta.pdfData;
+                      await this._loadPDF(this._pdfData);
+                      pdfReady = true;
+                    } catch (err) {
+                      console.warn('restore pdf from AppStore meta failed', err);
+                    }
+                  } else {
+                    const fingerprint = meta.pdfFingerprint;
+                    const cachedEntry = (fingerprint && PDF_CACHE.get(fingerprint)) || PDF_CACHE.get('__last__');
+                    if (cachedEntry && cachedEntry.doc) {
+                      this.pdfDoc = cachedEntry.doc;
+                      this.pdfTotal = cachedEntry.total || (this.pdfDoc?.numPages || this.pdfTotal);
+                      this._pdfData = cachedEntry.data || this._pdfData;
+                      this.pdfFingerprint = cachedEntry.fingerprint || fingerprint || this.pdfFingerprint;
+                      this.currentDocType = 'pdf';
+                      pdfReady = true;
+                    }
+                  }
+
+                  if (pdfReady) {
+                    const targetPage = this.clamp(restoredPage || 1, 1, this.pdfTotal || 1);
+                    this.pdfCurrent = targetPage;
+                    try {
+                      await this._renderPDFPage(this.pdfCurrent);
+                    } catch (err) {
+                      console.warn('restore pdf page failed', err);
+                    }
+                  }
+                }
+
                 try { this.$('#pdfPageIndicator').textContent = this.currentDocType === 'pdf' ? `PDF: ${this.pdfCurrent}/${this.pdfTotal}` : 'Image'; } catch(e){}
                 // ensure arrays exist for the restored page key and render
                 this.ensurePageArrays(); this._select(null); this._render();
@@ -642,12 +776,54 @@
         if (typeof d.showGrid === 'boolean') this.state.showGrid = d.showGrid;
         if (typeof d.showRulers === 'boolean') this.state.showRulers = d.showRulers;
         if (Array.isArray(d.scales)) this.scales = d.scales;
+        if (d.pdfFingerprint) this.pdfFingerprint = d.pdfFingerprint;
         // restore background image if persisted
         if (d.bgData) {
           const img = new Image();
-          img.onload = () => {
-            this.bgImg = img; this._bgData = d.bgData; this._bgKey = d.bgKey || null; this.currentDocType = d.currentDocType || 'image';
-            this.pdfCurrent = d.pdfCurrent || this.pdfCurrent; this.pdfTotal = d.pdfTotal || this.pdfTotal;
+          img.onload = async () => {
+            this.bgImg = img;
+            this._bgData = d.bgData;
+            this._bgKey = d.bgKey || null;
+            this.currentDocType = d.currentDocType || 'image';
+            const restoredPage = d.pdfCurrent || this.pdfCurrent;
+            this.pdfCurrent = restoredPage || this.pdfCurrent;
+            this.pdfTotal = d.pdfTotal || this.pdfTotal;
+            this.pdfFingerprint = d.pdfFingerprint || this.pdfFingerprint;
+
+            let pdfReady = false;
+            if (this.currentDocType === 'pdf') {
+              if (d.pdfData) {
+                try {
+                  this._pdfData = d.pdfData;
+                  await this._loadPDF(this._pdfData);
+                  pdfReady = true;
+                } catch (err) {
+                  console.warn('restore pdf from localStorage failed', err);
+                }
+              } else {
+                const fingerprint = d.pdfFingerprint;
+                const cachedEntry = (fingerprint && PDF_CACHE.get(fingerprint)) || PDF_CACHE.get('__last__');
+                if (cachedEntry && cachedEntry.doc) {
+                  this.pdfDoc = cachedEntry.doc;
+                  this.pdfTotal = cachedEntry.total || (this.pdfDoc?.numPages || this.pdfTotal);
+                  this._pdfData = cachedEntry.data || this._pdfData;
+                  this.pdfFingerprint = cachedEntry.fingerprint || fingerprint || this.pdfFingerprint;
+                  this.currentDocType = 'pdf';
+                  pdfReady = true;
+                }
+              }
+
+              if (pdfReady) {
+                const targetPage = this.clamp(restoredPage || 1, 1, this.pdfTotal || 1);
+                this.pdfCurrent = targetPage;
+                try {
+                  await this._renderPDFPage(this.pdfCurrent);
+                } catch (err) {
+                  console.warn('restore pdf page from cache failed', err);
+                }
+              }
+            }
+
             try { this.$('#pdfPageIndicator').textContent = this.currentDocType === 'pdf' ? `PDF: ${this.pdfCurrent}/${this.pdfTotal}` : 'Image'; } catch(e){}
             this.ensurePageArrays(); this._select(null); this._render();
           };
@@ -665,7 +841,7 @@
     clearBackground() {
       try {
         const oldKey = this._bgKey;
-        this.bgImg = null; this._bgData = null; this._bgKey = null; this.currentDocType = 'none'; this.pdfDoc = null; this.pdfCurrent = 1; this.pdfTotal = 0;
+        this.bgImg = null; this._bgData = null; this._bgKey = null; this.currentDocType = 'none'; this.pdfDoc = null; this.pdfCurrent = 1; this.pdfTotal = 0; this.pdfFingerprint = null;
         try { this.$('#pdfPageIndicator').textContent = '—'; } catch (e) {}
         // update persisted storage
         // remove persisted shapes associated to the old background key
@@ -1130,7 +1306,21 @@
       this.$('#pdfInput').addEventListener('change', async (e) => {
         const f = e.target.files[0]; if (!f) return;
         await this._ensurePdfJs();
-        await this._loadPDF(URL.createObjectURL(f));
+        try{
+          // read as dataURL so we can persist the PDF content and restore it later
+          const reader = new FileReader();
+          reader.onload = async () => {
+            try{
+              const dataUrl = reader.result;
+              if (typeof dataUrl === 'string') this._pdfData = dataUrl;
+              await this._loadPDF(dataUrl);
+            }catch(err){ console.warn('load pdf from dataurl failed', err); }
+          };
+          reader.readAsDataURL(f);
+        }catch(err){
+          // fallback to object URL if FileReader fails
+          await this._loadPDF(URL.createObjectURL(f));
+        }
       });
       this.$('#btnNextPage').addEventListener('click', async () => {
         if (!this.pdfDoc) return;
@@ -1159,6 +1349,14 @@ Tab Families · Del Delete · Ctrl+Z/Y Undo/Redo · Wheel: zoom`);
   };
 
       window.addEventListener('keydown', (e) => {
+        // Handle shortcuts when focus/target is inside this component's container
+        // or when the component is visible on screen (covers returning to the view)
+        try{
+          const active = document.activeElement;
+          const contains = (this.container.contains(active) || this.container.contains(e.target));
+          const visible = (function(self){ try{ const r = self.container.getBoundingClientRect(); const style = window.getComputedStyle(self.container); return r.width > 0 && r.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'; }catch(err){ return false; } })(this);
+          if (!(contains || visible)) return;
+        }catch(err){ /* ignore and bail */ return; }
         const k = e.key.toLowerCase(); this.shiftHeld = e.shiftKey;
         if (e.key === ' ') { this.panningBySpace = true; this._updateCursor(); }
         if (k === 'v') this._setTool('select'); else if (k === 'h') this._setTool('pan'); else if (k === 'r' && !e.shiftKey) this._setTool('rect'); else if (k === 'c') this._setTool('circle');
@@ -1172,8 +1370,19 @@ Tab Families · Del Delete · Ctrl+Z/Y Undo/Redo · Wheel: zoom`);
         else if (e.ctrlKey && k === 'z') { e.preventDefault(); this._undo(); }
         else if (e.ctrlKey && (k === 'y' || (e.shiftKey && k === 'z'))) { e.preventDefault(); this._redo(); }
         else if (k === 'escape') { if (this.polyWorking) { this.polyWorking = null; this.activeShape = null; this._render(); } this.measureTemp = null; }
+        // Page navigation: support Arrow keys and PageUp/PageDown explicitly
+        else if (k === 'arrowright' || k === 'pagedown') { e.preventDefault(); try{ this.$('#btnNextPage')?.click(); }catch(_){} }
+        else if (k === 'arrowleft'  || k === 'pageup')   { e.preventDefault(); try{ this.$('#btnPrevPage')?.click(); }catch(_){} }
       });
-      window.addEventListener('keyup', (e) => { this.shiftHeld = e.shiftKey; if (e.key === ' ') { this.panningBySpace = false; this._updateCursor(); } });
+      window.addEventListener('keyup', (e) => {
+        try{
+          const active = document.activeElement;
+          const contains = (this.container.contains(active) || this.container.contains(e.target));
+          const visible = (function(self){ try{ const r = self.container.getBoundingClientRect(); const style = window.getComputedStyle(self.container); return r.width > 0 && r.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'; }catch(err){ return false; } })(this);
+          if (!(contains || visible)) return;
+        }catch(err){ return; }
+        this.shiftHeld = e.shiftKey; if (e.key === ' ') { this.panningBySpace = false; this._updateCursor(); }
+      });
       // Botón Eliminar: elimina la forma seleccionada (Supr)
       this.$('#btnDelete').onclick = () => {
         try {
@@ -1241,14 +1450,36 @@ Tab Families · Del Delete · Ctrl+Z/Y Undo/Redo · Wheel: zoom`);
       const shown = (this.TABLE_EXPANDED ? fams : fams.slice(0, Math.min(this.TABLE_LIMIT, fams.length)));
       shown.forEach((f, idx) => {
         const tr = document.createElement('tr');
+        // attempt to read any saved annotation
+        let persisted = {};
+        try { persisted = JSON.parse(localStorage.getItem('familiesData') || '{}') || {}; } catch(e) { persisted = {}; }
+        const key = `${f.icon}|${f.color}`;
+        const ann = (persisted && persisted[key] && typeof persisted[key].annotation === 'string') ? persisted[key].annotation : '';
         tr.innerHTML = `
           <td>${idx + 1}</td>
           <td><span class="cad-tag">${f.icon}</span></td>
           <td><span class="cad-tag" style="border-color:${f.color};color:${f.color}">${f.color}</span></td>
+          <td><input class="cad-inp" data-annotation="${key}" value="${ann.replace(/"/g,'&quot;')}" style="width:100%" placeholder="Anotación / nomenclatura"></td>
           <td>${f.items.length}</td>
           <td><button class="cad-btn" data-goto="${f.icon}|${f.color}">Go</button></td>
           <td><button class="cad-btn danger" data-del="${f.icon}|${f.color}">Delete</button></td>`;
         tbody.appendChild(tr);
+      });
+
+      // Listen to annotation edits
+      this.$all('#table input[data-annotation]').forEach(inp => {
+        inp.addEventListener('change', (e) => {
+          try{
+            const k = e.target.getAttribute('data-annotation');
+            const v = String(e.target.value || '').trim();
+            const raw = JSON.parse(localStorage.getItem('familiesData') || '{}') || {};
+            raw[k] = raw[k] || {};
+            raw[k].annotation = v;
+            localStorage.setItem('familiesData', JSON.stringify(raw));
+            // emit update so consumers pick up the annotation change
+            window.dispatchEvent(new CustomEvent('updateMaterials', { detail: raw }));
+          }catch(err){ console.warn('annotation save failed', err); }
+        });
       });
 
       this.$all('#table [data-goto]').forEach(b => b.onclick = () => {
@@ -1341,8 +1572,25 @@ Tab Families · Del Delete · Ctrl+Z/Y Undo/Redo · Wheel: zoom`);
     /* ================== PDF ================== */
     async _loadPDF(url) {
       const pdfjsLib = window['pdfjs-dist/build/pdf'];
-      this.pdfDoc = await pdfjsLib.getDocument(url).promise;
+      const loadingTask = pdfjsLib.getDocument(url);
+      this.pdfDoc = await loadingTask.promise;
+      this.pdfFingerprint = (this.pdfDoc && this.pdfDoc.fingerprint) || this.pdfFingerprint || null;
       this.currentDocType = 'pdf'; this.pdfTotal = this.pdfDoc.numPages; this.pdfCurrent = 1;
+
+      // Cache document so a subsequent remount can reuse it without re-reading the source.
+      try {
+        const entry = {
+          doc: this.pdfDoc,
+          total: this.pdfTotal,
+          data: this._pdfData || (typeof url === 'string' && url.startsWith('data:') ? url : null),
+          fingerprint: this.pdfFingerprint || null
+        };
+        PDF_CACHE.set('__last__', entry);
+        if (entry.fingerprint) PDF_CACHE.set(entry.fingerprint, entry);
+      } catch (err) {
+        console.warn('pdf cache update failed', err);
+      }
+
       this.$('#pdfPageIndicator').textContent = `PDF: ${this.pdfCurrent}/${this.pdfTotal}`;
       await this._renderPDFPage(this.pdfCurrent);
       this.ensurePageArrays(); this._select(null); this._render();

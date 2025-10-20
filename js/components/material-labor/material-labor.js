@@ -22,16 +22,40 @@ export default function mount(el, props = {}) {
     taxPct:      toNum(props.taxPct      ??  8), // %
   };
 
-  const normalizeMaterial = (m = {}) => ({
-    name: String(m.name || ""),
-    qty: toNum(m.qty ?? 0),
-    unit: toNum(m.unit ?? 0)
-  });
+  // On load: remember familiesData stored by manualprinted to merge after hydration
+  let bootFamilies = null;
+  try{
+    const raw = localStorage.getItem('familiesData');
+    if(raw){
+      const js = JSON.parse(raw);
+      if(js && typeof js === 'object') bootFamilies = js;
+    }
+  }catch(e){ /* ignore parse errors */ }
+
+  const normalizeMaterial = (m = {}) => {
+    const colorSrc = typeof m.unitColor === "string" && m.unitColor.trim()
+      ? m.unitColor
+      : (typeof m.color === "string" ? m.color : "");
+    const color = String(colorSrc || "").trim();
+    const annotation = typeof m.annotation === "string" ? m.annotation : "";
+    const normalized = {
+      ...m,
+      name: String(m.name || ""),
+      qty: toNum(m.qty ?? 0),
+      unit: toNum(m.unit ?? 0),
+      annotation,
+      unitColor: color,
+      color
+    };
+    return normalized;
+  };
   const normalizeLabor = (l = {}) => ({
     role: String(l.role || ""),
     hours: toNum(l.hours ?? 0),
     rate: toNum(l.rate ?? 0)
   });
+  state.materials = state.materials.map(normalizeMaterial);
+  state.labor = state.labor.map(normalizeLabor);
   function hydrateStateFrom(data){
     if (!data || typeof data !== "object") return;
     if ("currency" in data) state.currency = String(data.currency || state.currency || "USD");
@@ -48,24 +72,60 @@ export default function mount(el, props = {}) {
 
   const store = (window.AppStore && typeof window.AppStore.getMaterialLabor === "function") ? window.AppStore : null;
   const STORE_READY = !!store;
+  // avoid reacting to our own store writes
+  let _suppressStore = false;
+  let _suppressFamilies = false;
+  // simple debounce util
+  function _debounce(fn, wait = 300){ let t = null; return (...args)=>{ if(t) clearTimeout(t); t = setTimeout(()=>{ try{ fn(...args); }catch(e){} }, wait); }; }
+  // debounced save to AppStore to avoid frequent immediate store events which trigger re-render
+  const debouncedStoreSave = (STORE_READY && typeof store.saveMaterialLabor === 'function') ? _debounce((snap)=>{
+    _suppressStore = true;
+    try{ store.saveMaterialLabor(snap); }catch(e){}
+    setTimeout(()=>{ _suppressStore = false; }, 800);
+  }, 500) : null;
   let unsubscribeStore = null;
   let unsubscribeBlueprint = null;
   let blueprintSummary = (STORE_READY && typeof store.getBlueprintSummary === "function")
     ? store.getBlueprintSummary()
     : null;
 
+  // If an AppStore exists, merge its snapshot but prefer localStorage data when present.
   if (STORE_READY) {
     try {
-      hydrateStateFrom(store.getMaterialLabor());
+      const snap = (typeof store.getMaterialLabor === 'function') ? store.getMaterialLabor() : null;
+      if (snap && typeof snap === 'object'){
+        const hasLocalMaterials = Array.isArray(state.materials) && state.materials.length > 0;
+        const hasLocalLabor = Array.isArray(state.labor) && state.labor.length > 0;
+        // If there's no local data, hydrate from store entirely.
+        if (!hasLocalMaterials && !hasLocalLabor) {
+          hydrateStateFrom(snap);
+        } else {
+          // Merge: only fill missing arrays/fields from store so we don't overwrite local edits
+          if (!hasLocalMaterials && Array.isArray(snap.materials) && snap.materials.length) state.materials = snap.materials.map(normalizeMaterial);
+          if (!hasLocalLabor && Array.isArray(snap.labor) && snap.labor.length) state.labor = snap.labor.map(normalizeLabor);
+          // For other scalar fields, prefer already-set state values. Only set if empty/undefined.
+          if (!state.contractors && snap.contractors) state.contractors = snap.contractors;
+          if (!state.allocation && snap.allocation) state.allocation = snap.allocation;
+          // numeric percentages: only apply if state has default/zero-ish values
+          if ((state.overheadPct === 0 || state.overheadPct === undefined || state.overheadPct === null) && snap.overheadPct !== undefined) state.overheadPct = toNum(snap.overheadPct);
+          if ((state.profitPct === 0 || state.profitPct === undefined || state.profitPct === null) && snap.profitPct !== undefined) state.profitPct = toNum(snap.profitPct);
+          if ((state.taxPct === 0 || state.taxPct === undefined || state.taxPct === null) && snap.taxPct !== undefined) state.taxPct = toNum(snap.taxPct);
+        }
+      }
     } catch (error) {
       console.warn("MaterialLabor store hydration failed", error);
     }
   }
 
+  if (bootFamilies) {
+    _applyFamiliesJSON(bootFamilies, { skipRender: true, skipSave: true });
+  }
+
   // --- Material & Labor (material-labor.js)
   // --- Escucha global y actualización de tabla
   // Single window listeners for updateMaterials and clearMaterials
-  function _applyFamiliesJSON(familiesJSON){
+  function _applyFamiliesJSON(familiesJSON, opts = {}){
+    const { skipSave = false, skipRender = false } = opts || {};
     try{
       // familiesJSON = { "icon|#color": { icon, color, count } }
       const incomingKeys = new Set(Object.keys(familiesJSON || {}));
@@ -81,14 +141,32 @@ export default function mount(el, props = {}) {
         const entry = familiesJSON[k];
         const icon = String(entry.icon || '').trim();
         const color = String(entry.color || '').trim();
+        const annotation = typeof entry.annotation === 'string' ? String(entry.annotation).trim() : '';
         const count = Number(entry.count) || 0;
+        const unitCost = entry.unitCost ?? entry.unit ?? entry.unit_price ?? null;
         const key = `${icon}|${color}`;
         if(currentMap.has(key)){
           const { m } = currentMap.get(key);
           m.qty = count;
+          if (typeof unitCost === 'number' && !Number.isNaN(unitCost)) {
+            m.unit = toNum(unitCost);
+          } else if (typeof unitCost === 'string' && unitCost.trim() !== '') {
+            m.unit = toNum(unitCost);
+          }
+          if (color) m.unitColor = color;
+          if (color) m.color = color;
+          // update annotation if provided
+          if(annotation) m.annotation = annotation;
         } else {
           // create new material entry
-          state.materials.push({ name: icon, qty: count, unit: 0, unitColor: color });
+          state.materials.push({
+            name: icon,
+            qty: count,
+            unit: unitCost != null ? toNum(unitCost) : 0,
+            unitColor: color,
+            color,
+            annotation: annotation
+          });
         }
       }
 
@@ -101,12 +179,23 @@ export default function mount(el, props = {}) {
         }
       }
 
-      save(); render();
+      if(!skipSave) save();
+      if(!skipRender) render();
     }catch(e){ console.error('applyFamiliesJSON failed', e); }
   }
 
-  function _onUpdateMaterials(ev){ if(!ev || !ev.detail) return; _applyFamiliesJSON(ev.detail); }
-  function _onClearMaterials(ev){ state.materials.length = 0; save(); render(); }
+  function _onUpdateMaterials(ev){ if(!ev || !ev.detail) return; if (_suppressFamilies) return; _applyFamiliesJSON(ev.detail); }
+  function _onClearMaterials(ev){
+    try{
+      // Only clear if explicitly forced by the emitter or user confirms the action
+      const forced = !!(ev && ev.detail && ev.detail.force);
+      if (!forced) {
+        const ok = window.confirm ? window.confirm('Clear all materials? This cannot be undone. Proceed?') : false;
+        if (!ok) return;
+      }
+      state.materials.length = 0; save(); render();
+    }catch(e){ console.warn('clearMaterials handler failed', e); }
+  }
 
   // attach once
   if(!window._ml_updateMaterials_attached){
@@ -115,11 +204,69 @@ export default function mount(el, props = {}) {
     window._ml_updateMaterials_attached = true;
   }
 
-  // On load: preload familiesData stored by manualprinted if present
-  try{
-    const raw = localStorage.getItem('familiesData');
-    if(raw){ const js = JSON.parse(raw); if(js && typeof js === 'object') _applyFamiliesJSON(js); }
-  }catch(e){ /* ignore parse errors */ }
+
+  // --------- FamiliesData sync helpers (bidirectional sync) ---------
+  function _familiesKeyForMaterial(m){
+    // material expected to have name and unitColor/color
+    const icon = String(m.name || '').trim();
+    const color = String(m.unitColor || m.color || '').trim();
+    return `${icon}|${color}`;
+  }
+
+  function readFamiliesData(){
+    try{ const raw = localStorage.getItem('familiesData'); return raw ? JSON.parse(raw) : {}; }catch(e){ return {}; }
+  }
+
+  function writeFamiliesData(obj){
+    try{
+      localStorage.setItem('familiesData', JSON.stringify(obj || {}));
+      _suppressFamilies = true;
+      window.dispatchEvent(new CustomEvent('updateMaterials',{ bubbles:true, detail: obj || {} }));
+    }catch(e){ console.warn('writeFamiliesData failed', e); }
+    finally { setTimeout(()=>{ _suppressFamilies = false; }, 0); }
+  }
+
+  function syncMaterialToFamilies(m){
+    try{
+      if (!m || !m.name) return;
+      const key = _familiesKeyForMaterial(m);
+      const families = readFamiliesData();
+      const entry = families[key] || { icon: m.name, color: m.unitColor || m.color || '', count: 0, annotation: '' };
+      // prefer numeric qty as count
+      entry.count = Number(m.qty) || Number(entry.count) || 0;
+      // persist last known unit cost so we can restore it when families sync runs
+      entry.unitCost = toNum(m.unit);
+      // propagate annotation if present
+      if (typeof m.annotation === 'string') entry.annotation = m.annotation;
+      entry.icon = m.name;
+      entry.color = m.unitColor || m.color || entry.color || '';
+      families[key] = entry;
+      writeFamiliesData(families);
+    }catch(e){ console.warn('syncMaterialToFamilies failed', e); }
+  }
+
+  function syncRenameMaterialToFamilies(oldKey, m){
+    try{
+      if (!m || !m.name) return;
+      const families = readFamiliesData();
+      const newKey = _familiesKeyForMaterial(m);
+      if (oldKey && oldKey !== newKey && families[oldKey]){
+        // move entry
+        const entry = families[oldKey];
+        entry.icon = m.name;
+        entry.color = m.unitColor || m.color || entry.color || '';
+        entry.annotation = m.annotation || entry.annotation || '';
+        entry.count = Number(m.qty) || Number(entry.count) || 0;
+        entry.unitCost = toNum(m.unit);
+        delete families[oldKey];
+        families[newKey] = entry;
+        writeFamiliesData(families);
+        return;
+      }
+      // fallback: normal sync
+      syncMaterialToFamilies(m);
+    }catch(e){ console.warn('syncRenameMaterialToFamilies failed', e); }
+  }
 
   // --------- Estilos (dark pro) ---------
   injectOnce("ml-css", `
@@ -229,6 +376,7 @@ export default function mount(el, props = {}) {
               <table class="tbl">
                 <thead><tr>
                   <th class="th">Item</th>
+                  <th class="th">Annotation</th>
                   <th class="th">Qty</th>
                   <th class="th">Unit cost</th>
                   <th class="th">Line total</th>
@@ -238,6 +386,7 @@ export default function mount(el, props = {}) {
                 <tfoot class="quick">
                   <tr>
                     <td class="td"><input class="inp" placeholder="e.g., Steel beam" data-role="mat-name"/></td>
+                    <td class="td"><input class="inp" placeholder="Annotation" data-role="mat-annotation"/></td>
                     <td class="td"><input class="inp inp-num" type="number" step="0.01" min="0" value="1" data-role="mat-qty"/></td>
                     <td class="td"><input class="inp inp-num" type="number" step="0.01" min="0" value="0" data-role="mat-unit"/></td>
                     <td class="td subtitle" data-role="mat-new-total">$ 0</td>
@@ -335,7 +484,8 @@ export default function mount(el, props = {}) {
     matQty:       qs('[data-role="mat-qty"]'),
     matUnit:      qs('[data-role="mat-unit"]'),
     matNewTotal:  qs('[data-role="mat-new-total"]'),
-    matAdd:       qs('[data-role="mat-add"]'),
+  matAdd:       qs('[data-role="mat-add"]'),
+  matAnnotation: qs('[data-role="mat-annotation"]'),
     matTotal:     qs('[data-role="mat-total"]'),
     // labor UI
     labBody:      qs('[data-role="lab-body"]'),
@@ -406,10 +556,14 @@ export default function mount(el, props = {}) {
   });
   r.matAdd.addEventListener("click", ()=>{
     const name = (r.matName.value||"").trim();
+    const annotation = (r.matAnnotation?.value || r.querySelector('[data-role="mat-annotation"]')?.value || "").trim ? (r.matAnnotation?.value || r.querySelector('[data-role="mat-annotation"]')?.value || "") : "";
     const qty  = clampNum(r.matQty.value, 0, 1e9);
     const unit = clampNum(r.matUnit.value,0, 1e9);
     if(!name) { toast("Enter a material name"); r.matName.focus(); return; }
-    state.materials.push({ name, qty, unit });
+    const newMat = { name, annotation: (r.matAnnotation?.value || r.querySelector('[data-role="mat-annotation"]')?.value || ""), qty, unit };
+    state.materials.push(newMat);
+    // sync to familiesData so manualprinted and others see it
+    try{ syncMaterialToFamilies(Object.assign({}, newMat)); }catch(e){}
     r.matName.value=""; r.matQty.value="1"; r.matUnit.value="0"; r.matNewTotal.textContent = fmtMoney(0);
     save(); render();
   });
@@ -454,8 +608,8 @@ export default function mount(el, props = {}) {
         const txt = String(reader.result||"");
         const parsed = parseCSV(txt);
         if(parsed.materials || parsed.labor){
-          state.materials = parsed.materials || [];
-          state.labor = parsed.labor || [];
+          state.materials = (parsed.materials || []).map(normalizeMaterial);
+          state.labor = (parsed.labor || []).map(normalizeLabor);
           save(); render();
           toast("CSV imported");
         } else { toast("CSV format not recognized","warn"); }
@@ -465,10 +619,19 @@ export default function mount(el, props = {}) {
     reader.readAsText(f);
   });
 
-  if (STORE_READY && typeof store.subscribe === "function") {
+    if (STORE_READY && typeof store.subscribe === "function") {
     unsubscribeStore = store.subscribe("materialLabor:changed", (payload = {}) => {
+      if (_suppressStore) return; // ignore updates caused by our own save
       const next = payload?.materialLabor || (store.getMaterialLabor ? store.getMaterialLabor() : null);
       if (!next) return;
+      // If we already have local data entered by the user, avoid overwriting it when the store emits.
+      // This ensures navigating around the app or unrelated store events won't clobber local edits.
+      if ((Array.isArray(state.materials) && state.materials.length) || (Array.isArray(state.labor) && state.labor.length)) {
+        // still update form-level scalars (if empty) and ignore replacing materials/labor
+        if (!state.contractors && next.contractors) state.contractors = next.contractors;
+        if (!state.allocation && next.allocation) state.allocation = next.allocation;
+        return;
+      }
       hydrateStateFrom(next);
       syncFormFromState();
       render();
@@ -508,6 +671,11 @@ export default function mount(el, props = {}) {
 
   // Atajos
   const onKey = (e)=>{
+    // Only act when the event target or the currently focused element is inside this component
+    try{
+      const active = document.activeElement;
+      if (!(el.contains(active) || el.contains(e.target))) return;
+    }catch(err){ return; }
     if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
     if (e.key.toLowerCase()==="n") r.matName.focus();
     if (e.key.toLowerCase()==="l") r.labRole.focus();
@@ -524,11 +692,17 @@ export default function mount(el, props = {}) {
     getState(){ return JSON.parse(JSON.stringify(state)); },
     setState(patch={}){ Object.assign(state, patch); save(); render(); },
     destroy(){
+      try{ save(); }catch(e){}
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("ui:sidebar:toggle", onAsideToggle);
       document.removeEventListener("ui:data:update", onBlueprintDataUpdate);
       if (unsubscribeStore) try { unsubscribeStore(); } catch {}
       if (unsubscribeBlueprint) try { unsubscribeBlueprint(); } catch {}
+      // remove beforeunload and navigation listeners
+      try { window.removeEventListener('beforeunload', _beforeUnloadSave); } catch {}
+      try { document.removeEventListener('visibilitychange', _onVisibilityChange); } catch {}
+      try { window.removeEventListener('pagehide', _beforeUnloadSave); } catch {}
+      try { window.removeEventListener('popstate', _beforeUnloadSave); } catch {}
     }
   };
 
@@ -574,12 +748,41 @@ export default function mount(el, props = {}) {
   }
 
   function mergeBlueprintMaterial(icon, count) {
-    const existing = state.materials.find(m => (m.name || "").toLowerCase() === icon.toLowerCase());
+    const color = blueprintColorForIcon(icon, blueprintSummary);
+    const keyColor = (color || "").toLowerCase();
+    const existing = state.materials.find(m => {
+      const sameName = (m.name || "").toLowerCase() === icon.toLowerCase();
+      const matColor = (m.unitColor || m.color || "").toLowerCase();
+      return sameName && (keyColor ? matColor === keyColor : true);
+    });
+    let storedUnit = 0;
+    try {
+      const families = readFamiliesData();
+      const famKey = `${icon}|${color || ""}`;
+      if (families[famKey] && families[famKey].unitCost != null) {
+        storedUnit = toNum(families[famKey].unitCost);
+      }
+    } catch (err) { /* ignore */ }
     if (existing) {
       existing.qty = clampNum((existing.qty || 0) + count, 0, 1e9);
+      if (color && !(existing.unitColor || existing.color)) {
+        existing.unitColor = color;
+        existing.color = color;
+      }
+      if (!existing.unit && storedUnit) existing.unit = storedUnit;
+      try { syncMaterialToFamilies(existing); } catch (err) {}
       return false;
     }
-    state.materials.push({ name: icon, qty: count, unit: 0 });
+    const newMat = {
+      name: icon,
+      qty: count,
+      unit: storedUnit,
+      unitColor: color || '',
+      color: color || '',
+      annotation: ''
+    };
+    state.materials.push(newMat);
+    try { syncMaterialToFamilies(newMat); } catch (err) {}
     return true;
   }
 
@@ -633,12 +836,31 @@ export default function mount(el, props = {}) {
     // Materiales
     r.matBody.querySelectorAll("[data-i]").forEach(row=>{
       const i = +row.dataset.i;
+      // store current families key for rename tracking
+      try{ row.dataset.oldkey = _familiesKeyForMaterial(state.materials[i]); }catch(e){ row.dataset.oldkey = ""; }
       const q = (sel)=> row.querySelector(sel);
-      q('[data-f="name"]').addEventListener("input", (e)=>{ state.materials[i].name = e.target.value; save(); updateLineTotals(row,"mat",i); });
-      q('[data-f="qty"]').addEventListener("input",  (e)=>{ state.materials[i].qty  = clampNum(e.target.value,0,1e9); save(); updateLineTotals(row,"mat",i); });
-      q('[data-f="unit"]').addEventListener("input", (e)=>{ state.materials[i].unit = clampNum(e.target.value,0,1e9); save(); updateLineTotals(row,"mat",i); });
-      q('[data-dup]').addEventListener("click", ()=>{ state.materials.splice(i+1,0, {...state.materials[i]}); save(); render(); });
-      q('[data-del]').addEventListener("click", ()=>{ state.materials.splice(i,1); save(); render(); });
+      // name: update state only (no full render to preserve focus)
+      const nameEl = q('[data-f="name"]');
+      if(nameEl) nameEl.addEventListener("input", (e)=>{ state.materials[i].name = e.target.value; save(); updateSummaryUI(); });
+      // annotation: update state only
+      const annEl = q('[data-f="annotation"]');
+      if(annEl) annEl.addEventListener("input", (e)=>{ state.materials[i].annotation = e.target.value; save(); try{ syncMaterialToFamilies(state.materials[i]); }catch(e){} /* do not re-render rows */ });
+      // name changes should also sync to familiesData (rename or create)
+  if(nameEl) nameEl.addEventListener("change", (e)=>{ const oldKey = row.dataset.oldkey || ''; state.materials[i].name = e.target.value; try{ syncRenameMaterialToFamilies(oldKey, state.materials[i]); }catch(e){} row.dataset.oldkey = _familiesKeyForMaterial(state.materials[i]); save(); updateSummaryUI(); });
+      // qty/unit: update state, update line total cell and summary (no full re-render)
+      const qtyEl = q('[data-f="qty"]');
+      if(qtyEl) qtyEl.addEventListener("input",  (e)=>{ state.materials[i].qty  = clampNum(e.target.value,0,1e9); save(); row.querySelector('[data-total]').textContent = fmtMoney(state.materials[i].qty * state.materials[i].unit); updateSummaryUI(); });
+      const unitEl = q('[data-f="unit"]');
+      if(unitEl) unitEl.addEventListener("input", (e)=>{
+        state.materials[i].unit = clampNum(e.target.value,0,1e9);
+        save();
+        row.querySelector('[data-total]').textContent = fmtMoney(state.materials[i].qty * state.materials[i].unit);
+        try{ syncMaterialToFamilies(state.materials[i]); }catch(err){}
+        updateSummaryUI();
+      });
+      // duplicate / delete still re-render the table because structure changes
+      if(q('[data-dup]')) q('[data-dup]').addEventListener("click", ()=>{ state.materials.splice(i+1,0, JSON.parse(JSON.stringify(state.materials[i]) )); save(); render(); });
+      if(q('[data-del]')) q('[data-del]').addEventListener("click", ()=>{ state.materials.splice(i,1); save(); render(); });
     });
 
     // Labor
@@ -688,16 +910,50 @@ export default function mount(el, props = {}) {
       const it = state.labor[idx] || {hours:0,rate:0};
       row.querySelector('[data-total]').textContent = fmtMoney(it.hours * it.rate);
     }
-    save(); render(); // refrescar sumarios y donut
+    save();
+    // actualizar sólo los totales/donut para no reconstruir DOM y perder focus
+    updateSummaryUI();
+  }
+
+  // Actualiza UI de totales y donut sin re-renderizar tablas
+  function updateSummaryUI(){
+    try{
+      const { mat, lab, summary } = calcSummary();
+      r.matTotal.textContent = fmtMoney(mat);
+      r.labTotal.textContent = fmtMoney(lab);
+
+      r.sMat.textContent = fmtMoney(summary.materials);
+      r.sLab.textContent = fmtMoney(summary.labor);
+      r.sSub.textContent = fmtMoney(summary.subtotal);
+      r.sOh.textContent  = fmtMoney(summary.overhead);
+      r.sPr.textContent  = fmtMoney(summary.profit);
+      r.sTax.textContent = fmtMoney(summary.tax);
+      r.grand.textContent= fmtMoney(summary.total);
+
+      r.donut.innerHTML = donut([
+        { v: summary.materials, color:"#22D3EE" },
+        { v: summary.labor,     color:"#86EFAC" },
+        { v: summary.overhead,  color:"#F59E0B" },
+        { v: summary.profit,    color:"#60A5FA" },
+        { v: summary.tax,       color:"#FCA5A5" },
+      ]);
+
+      // notificar a la app para correlación con el resto
+      el.dispatchEvent(new CustomEvent("ml:updated", {
+        bubbles:true,
+        detail: { materials:state.materials.slice(), labor:state.labor.slice(), summary }
+      }));
+    }catch(e){ console.warn('updateSummaryUI failed', e); }
   }
 
   function matRow(m, i){
-    const t = m.qty * m.unit;
+    const t = toNum(m.qty) * toNum(m.unit);
     return `
       <tr class="row" data-i="${i}">
         <td class="td"><input class="inp" data-f="name" value="${escAttr(m.name||"")}" placeholder="Item"/></td>
-        <td class="td"><input class="inp inp-num" type="number" step="0.01" min="0" data-f="qty"  value="${escAttr(m.qty ?? 0)}"/></td>
-        <td class="td"><input class="inp inp-num" type="number" step="0.01" min="0" data-f="unit" value="${escAttr(m.unit ?? 0)}"/></td>
+        <td class="td"><input class="inp" data-f="annotation" value="${escAttr(m.annotation||"")}" placeholder="Annotation"/></td>
+  <td class="td"><input class="inp inp-num" style="width:80px" type="number" step="0.01" min="0" data-f="qty"  value="${escAttr(m.qty ?? 0)}"/></td>
+  <td class="td"><input class="inp inp-num" style="width:100px" type="number" step="0.01" min="0" data-f="unit" value="${escAttr(m.unit ?? 0)}"/></td>
         <td class="td" data-total>${fmtMoney(t)}</td>
         <td class="td">
           <div class="actions">
@@ -710,17 +966,16 @@ export default function mount(el, props = {}) {
   }
 
   function labRow(l, i){
-    const t = l.hours * l.rate;
     return `
-      <tr class="row" data-i="${i}">
+      <tr class="row" data-idx="${i}">
         <td class="td"><input class="inp" data-f="role" value="${escAttr(l.role||"")}" placeholder="Role"/></td>
-        <td class="td"><input class="inp inp-num" type="number" step="0.01" min="0" data-f="hours" value="${escAttr(l.hours ?? 0)}"/></td>
-        <td class="td"><input class="inp inp-num" type="number" step="0.01" min="0" data-f="rate"  value="${escAttr(l.rate ?? 0)}"/></td>
-        <td class="td" data-total>${fmtMoney(t)}</td>
+  <td class="td"><input class="inp inp-num" style="width:80px" data-f="hours" type="number" step="0.01" min="0" value="${escAttr(l.hours ?? 0)}"/></td>
+  <td class="td"><input class="inp inp-num" style="width:100px" data-f="rate" type="number" step="0.01" min="0" value="${escAttr(l.rate ?? 0)}"/></td>
+        <td class="td" data-total>${fmtMoney(toNum(l.hours) * toNum(l.rate))}</td>
         <td class="td">
           <div class="actions">
-            <button class="ic" title="Duplicate" data-dup>${icoCopy()}</button>
-            <button class="ic danger" title="Remove" data-del>${icoTrash()}</button>
+            <button class="ic" data-dup title="Duplicate">${icoCopy()}</button>
+            <button class="ic danger" data-del title="Remove">${icoTrash()}</button>
           </div>
         </td>
       </tr>
@@ -826,15 +1081,33 @@ export default function mount(el, props = {}) {
       allocation: state.allocation,
       overheadPct: state.overheadPct,
       profitPct: state.profitPct,
-      taxPct: state.taxPct
+      taxPct: state.taxPct,
+      _savedAt: (new Date()).toISOString()
     }));
     try { localStorage.setItem(LS_KEY, JSON.stringify(snap)); }
     catch (e) { console.warn("MaterialLabor local save failed", e); }
     if (STORE_READY && typeof store.saveMaterialLabor === "function") {
-      try { store.saveMaterialLabor(snap); }
+      try {
+        if (debouncedStoreSave) debouncedStoreSave(snap);
+        else { _suppressStore = true; try{ store.saveMaterialLabor(snap); }catch(e){} setTimeout(()=>{ _suppressStore = false; }, 800); }
+      }
       catch (e) { console.warn("AppStore saveMaterialLabor failed", e); }
     }
   }
+
+  // Ensure we persist data on unload/navigation so user edits aren't lost
+  function _beforeUnloadSave(e){
+    try{ save(); }catch(e){}
+    // no need to set returnValue unless you want a confirmation dialog
+  }
+  window.addEventListener('beforeunload', _beforeUnloadSave);
+  // also handle visibility changes and SPA navigation events
+  function _onVisibilityChange(){ if (document.visibilityState === 'hidden') try{ save(); }catch(e){} }
+  document.addEventListener('visibilitychange', _onVisibilityChange);
+  // pagehide to catch some mobile browsers / back navigations
+  window.addEventListener('pagehide', _beforeUnloadSave);
+  // popstate for SPA back/forward navigation
+  window.addEventListener('popstate', _beforeUnloadSave);
 
   // --------- utilidades ---------
   function fmtMoney(n){

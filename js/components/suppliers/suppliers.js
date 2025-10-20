@@ -467,6 +467,10 @@ export default function mountSuppliers(el, props = {}) {
   };
 
   const onShortcut = (event) => {
+    try{
+      const active = document.activeElement;
+      if (!(el.contains(active) || el.contains(event.target))) return;
+    }catch(e){ return; }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
       event.preventDefault();
       $search.focus();

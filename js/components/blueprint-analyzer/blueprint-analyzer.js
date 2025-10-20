@@ -1481,16 +1481,23 @@ export default async function mount(el, props = {}) {
   
   // Event listeners globales
   try {
-    // Cerrar modales con ESC
+    // Cerrar modales con ESC — sólo cuando el foco/target está dentro de un modal o cuando hay un modal abierto
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        const columnModal = $("[data-role='column-modal']");
-        const datasetModal = $("[data-role='dataset-modal']");
-        const columnsTableModal = $("[data-role='columns-table-modal']");
-        
-        if (columnModal && columnModal.classList.contains('show')) hideColumnModal();
-        if (datasetModal && datasetModal.classList.contains('show')) hideDatasetModal();
-        if (columnsTableModal && columnsTableModal.classList.contains('show')) closeColumnsTableModal();
+        try{
+          const t = e.target;
+          const isInteractive = t && t.tagName && ['INPUT','TEXTAREA','SELECT'].includes(t.tagName.toUpperCase());
+          const columnModal = $("[data-role='column-modal']");
+          const datasetModal = $("[data-role='dataset-modal']");
+          const columnsTableModal = $("[data-role='columns-table-modal']");
+          const anyOpen = (columnModal && columnModal.classList.contains('show')) || (datasetModal && datasetModal.classList.contains('show')) || (columnsTableModal && columnsTableModal.classList.contains('show'));
+          // if no modal is open, or focus is in an input, do not intercept
+          if (!anyOpen) return;
+          if (isInteractive && ! (columnModal && columnModal.contains(t)) && ! (datasetModal && datasetModal.contains(t)) && ! (columnsTableModal && columnsTableModal.contains(t))) return;
+          if (columnModal && columnModal.classList.contains('show')) hideColumnModal();
+          if (datasetModal && datasetModal.classList.contains('show')) hideDatasetModal();
+          if (columnsTableModal && columnsTableModal.classList.contains('show')) closeColumnsTableModal();
+        }catch(err){ /* ignore */ }
       }
     });
     
